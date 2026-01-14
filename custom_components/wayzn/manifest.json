@@ -1,0 +1,12 @@
+{
+  "domain": "wayzn",
+  "name": "Wayzn",
+  "codeowners": ["@aijayadams"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/aijayadams/wayzn_client",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/aijayadams/wayzn_client/issues",
+  "requirements": ["requests>=2.25.0"],
+  "version": "0.1.0"
+}

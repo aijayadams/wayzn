@@ -1,0 +1,40 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Wayzn",
+        "description": "Enter your Wayzn account credentials and Firebase API key",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "api_key": "Firebase API Key"
+        }
+      },
+      "device": {
+        "title": "Add Wayzn Device",
+        "description": "Enter your device's QR code. Format: QR-Code:base64key:knum:device_id:label",
+        "data": {
+          "qr_code": "QR Code"
+        }
+      },
+      "reauth": {
+        "title": "Re-authenticate with Wayzn",
+        "description": "Your Wayzn credentials have expired. Please enter your password to re-authenticate. Email: {email}",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "auth_failed": "Authentication failed. Check your email, password, and API key.",
+      "invalid_qr": "Invalid QR code format. Expected: QR-Code:base64key:knum:device_id:label",
+      "device_not_found": "Device not found. Make sure the device is registered with your Wayzn account.",
+      "cannot_connect": "Cannot connect to Wayzn service. Check your internet connection."
+    },
+    "abort": {
+      "already_configured": "This device is already configured.",
+      "reauth_successful": "Re-authentication successful.",
+      "reauth_failed": "Re-authentication failed."
+    }
+  }
+}

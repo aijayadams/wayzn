@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 import click
 import requests
 
-import wayzn_core as core
+from custom_components.wayzn import wayzn_core as core
 
 
 # ============================================================================

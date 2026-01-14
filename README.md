@@ -1,19 +1,28 @@
 # Wayzn Client 🚪🐕
 
-A Python CLI for controlling Wayzn smart petdoors via Firebase and Electric Imp.
+A Python CLI and Home Assistant integration for controlling Wayzn smart petdoors via Firebase and Electric Imp.
 
 ## Overview
 
-Wayzn Client lets you:
+### Python CLI
 - 🔐 Authenticate with Firebase
 - 📱 Register devices from QR codes
 - 🔍 Check device status
 - 🔓 Open/close your petdoor remotely
 - 🔬 Debug Firebase RTDB directly
 
+### Home Assistant Integration
+- 🏠 Integrate Wayzn devices as cover entities in Home Assistant
+- 🔐 Config flow for easy setup
+- 📊 Real-time status updates
+- 🎛️ Open/close controls from Home Assistant UI
+- 🔌 Support for multiple devices
+
 ## Installation
 
-### Requirements
+### Python CLI
+
+#### Requirements
 - Python 3.7+
 - Dependencies: `click`, `requests`
 
@@ -21,12 +30,40 @@ Wayzn Client lets you:
 pip install -r requirements.txt
 ```
 
-### Optional Tools
+#### Optional Tools
 - `zbarimg` - For scanning QR codes from images (Debian/Ubuntu: `apt install zbar-tools`)
+
+### Home Assistant Integration
+
+#### Installation Methods
+
+**Option 1: Manual (Recommended for Development)**
+1. Copy the `custom_components/wayzn/` directory to your Home Assistant `config/custom_components/` directory
+2. Restart Home Assistant
+3. Go to Settings → Integrations → Add Integration
+4. Search for "Wayzn"
+5. Follow the config flow to add your device
+
+**Option 2: HACS (When Published)**
+1. In Home Assistant, go to HACS → Integrations
+2. Search for "Wayzn"
+3. Install the integration
+4. Restart Home Assistant
+5. Go to Settings → Integrations → Add Integration
+6. Search for "Wayzn"
+7. Follow the config flow to add your device
+
+#### Configuration
+The integration uses a config flow UI - no manual config file needed!
+You'll need:
+- **Email**: Your Wayzn account email
+- **Password**: Your Wayzn account password
+- **Firebase API Key**: Get from Wayzn's Firebase console
+- **QR Code**: Scan the QR code from your device (format: `QR-Code:base64key:knum:device_id:label`)
 
 ## Configuration
 
-### Setup
+### Python CLI Setup
 
 1. **Create config file:**
    ```bash
@@ -49,6 +86,10 @@ pip install -r requirements.txt
    - **email/password**: Wayzn account credentials
    - **api_key**: [Wayzn Firebase Project ID](https://firebase.google.com/docs/projects/api-keys), Wayzn ship this in `GoogleService-Info.plist`.
    - **device_registry**: Auto-populated when you import devices (see below)
+
+### Project Structure Note
+- `wayzn_core.py` has been moved to `custom_components/wayzn/wayzn_core.py` to support the Home Assistant integration
+- The CLI (`wayzn.py`) imports from the new location
 
 ## Quick Start
 
