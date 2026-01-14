@@ -7,13 +7,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 
 from .const import DOMAIN, PLATFORMS
-from .coordinator import WayznDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Wayzn from a config entry."""
+    # Import here to avoid issues at load time
+    from .coordinator import WayznDataUpdateCoordinator
+
     hass.data.setdefault(DOMAIN, {})
 
     # Create coordinator
