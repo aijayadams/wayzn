@@ -1,0 +1,8 @@
+{
+  "firebase": {
+    "email": "your-email@gmail.com",
+    "password": "your-firebase-password",
+    "api_key": "AIzaSy_YOUR_API_KEY_HERE"
+  },
+  "device_registry": {}
+}
