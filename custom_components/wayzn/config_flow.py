@@ -32,6 +32,7 @@ class WayznConfigFlow(config_entries.ConfigFlow):
     """Handle a config flow for Wayzn."""
 
     VERSION = 1
+    DOMAIN = "wayzn"
 
     def __init__(self):
         """Initialize the config flow."""
@@ -105,7 +106,7 @@ class WayznConfigFlow(config_entries.ConfigFlow):
 
                 # Check if already configured
                 await self.async_set_unique_id(device_id)
-                self.async_abort_if_unique_id_configured()
+                self._abort_if_unique_id_configured()
 
                 # Fetch agent URL
                 try:
