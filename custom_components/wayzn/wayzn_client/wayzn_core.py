@@ -102,13 +102,27 @@ def _module_dir() -> Path:
 
 
 def config_path(path: Optional[str] = None) -> Path:
-    """Resolve config file path (absolute or relative to module)."""
+    """Resolve config file path.
+
+    For absolute paths, use them directly.
+    For relative paths, check cwd first, then module directory.
+    """
     if path:
         p = Path(path)
         if p.is_absolute():
             return p
-        return _module_dir() / path
-    return _module_dir() / CONFIG_FILE_DEFAULT
+        # Check current working directory first
+        if p.exists():
+            return p.resolve()
+        # Fall back to module directory
+        return (_module_dir() / path).resolve()
+
+    # Default: check cwd first, then module directory
+    default_name = CONFIG_FILE_DEFAULT
+    cwd_path = Path(default_name)
+    if cwd_path.exists():
+        return cwd_path.resolve()
+    return _module_dir() / default_name
 
 
 def _auth_cache_path(cfg_path: Optional[Path] = None) -> Path:

@@ -1,5 +1,6 @@
 """DataUpdateCoordinator for Wayzn integration."""
 
+import asyncio
 import logging
 from datetime import timedelta
 from typing import Any, Dict, Optional
@@ -8,18 +9,26 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from . import wayzn_core as core
+from .wayzn_client import wayzn_core as core
 from .const import (
+    CONF_AGENTURL,
     CONF_API_KEY,
     CONF_DEVICE_ID,
     CONF_DEVICE_LABEL,
     CONF_EMAIL,
+    CONF_KNUM,
     CONF_PASSWORD,
+    CONF_WKEY,
     DEFAULT_POLL_INTERVAL,
     DOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Polling intervals
+NORMAL_POLL_INTERVAL = DEFAULT_POLL_INTERVAL  # 30 seconds
+ACTIVE_POLL_INTERVAL = 2  # 2 seconds during active commands
+MAX_ACTIVE_POLL_TIME = 60  # Maximum 60 seconds of fast polling
 
 
 class WayznDataUpdateCoordinator(DataUpdateCoordinator):
@@ -29,12 +38,15 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         """Initialize the coordinator."""
         self.config_entry = config_entry
         self._auth_token: Optional[str] = None
+        self._pending_command: Optional[str] = None
+        self._target_state: Optional[str] = None
+        self._active_command_start: Optional[float] = None
 
         super().__init__(
             hass,
             _LOGGER,
             name=f"Wayzn {config_entry.data[CONF_DEVICE_LABEL]}",
-            update_interval=timedelta(seconds=DEFAULT_POLL_INTERVAL),
+            update_interval=timedelta(seconds=NORMAL_POLL_INTERVAL),
         )
 
     async def _async_update_data(self) -> Dict[str, Any]:
@@ -63,6 +75,9 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
             status = await self.hass.async_add_executor_job(
                 self._get_status_summary, email, password, api_key, device_id
             )
+
+            # Check if we should adjust polling frequency
+            await self._update_poll_interval(status)
 
             return status
 
@@ -111,26 +126,93 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as e:
             raise core.WayznError(f"Failed to get device status: {e}") from e
 
+    async def _update_poll_interval(self, status: Dict[str, Any]) -> None:
+        """Update polling interval based on active commands."""
+        import time
+
+        if not self._pending_command:
+            # No active command, use normal polling
+            self.update_interval = timedelta(seconds=NORMAL_POLL_INTERVAL)
+            return
+
+        # Check if we've reached the target state
+        current_state = status.get("state")
+        if current_state == self._target_state:
+            _LOGGER.debug(
+                "Target state '%s' reached, reverting to normal polling", self._target_state
+            )
+            self._pending_command = None
+            self._target_state = None
+            self._active_command_start = None
+            self.update_interval = timedelta(seconds=NORMAL_POLL_INTERVAL)
+            return
+
+        # Check if we've exceeded max active polling time
+        if self._active_command_start:
+            elapsed = time.time() - self._active_command_start
+            if elapsed > MAX_ACTIVE_POLL_TIME:
+                _LOGGER.warning(
+                    "Active command timeout after %.1f seconds, reverting to normal polling",
+                    elapsed,
+                )
+                self._pending_command = None
+                self._target_state = None
+                self._active_command_start = None
+                self.update_interval = timedelta(seconds=NORMAL_POLL_INTERVAL)
+                return
+
+        # Still waiting for target state, use fast polling
+        self.update_interval = timedelta(seconds=ACTIVE_POLL_INTERVAL)
+
     async def async_send_command(self, command: str) -> None:
         """Send a command to the device (open/close)."""
         try:
+            import time
+
             email = self.config_entry.data[CONF_EMAIL]
             password = self.config_entry.data[CONF_PASSWORD]
             api_key = self.config_entry.data[CONF_API_KEY]
             device_id = self.config_entry.data[CONF_DEVICE_ID]
 
+            # Set up fast polling for this command
+            self._pending_command = command
+            self._target_state = "open" if command == "open" else "closed"
+            self._active_command_start = time.time()
+
+            # Optimistic state update: immediately show opening/closing to make UI responsive
+            optimistic_state = "opening" if command == "open" else "closing"
+            if self.data:
+                optimistic_data = self.data.copy()
+                optimistic_data["state"] = optimistic_state
+                self.data = optimistic_data
+                self.async_update_listeners()
+
+            _LOGGER.debug(
+                "Issuing command '%s', expecting state '%s'. Starting fast polling.",
+                command,
+                self._target_state,
+            )
+
             await self.hass.async_add_executor_job(
                 self._send_command_sync, email, password, api_key, device_id, command
             )
 
-            # Trigger immediate refresh
+            # Trigger immediate refresh to get latest state
             await self.async_refresh()
 
         except core.WayznError as e:
             _LOGGER.error("Failed to send command: %s", e)
+            # Reset pending command on error
+            self._pending_command = None
+            self._target_state = None
+            self._active_command_start = None
             raise UpdateFailed(f"Failed to send command: {e}") from e
         except Exception as e:
             _LOGGER.error("Unexpected error sending command: %s", e)
+            # Reset pending command on error
+            self._pending_command = None
+            self._target_state = None
+            self._active_command_start = None
             raise UpdateFailed(f"Unexpected error: {e}") from e
 
     def _send_command_sync(
@@ -147,32 +229,40 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
             if not id_token:
                 raise core.WayznError("No ID token in response")
 
-            # Resolve device context (get wkey, nonce, agent URL)
-            ctx = core.resolve_imp_context(
-                cfg_path=None,
-                force_login=False,
-                id_token_override=id_token,
-                device_id=device_id,
-            )
+            # Get device info from config entry
+            wkey = self.config_entry.data.get(CONF_WKEY)
+            knum = self.config_entry.data.get(CONF_KNUM)
+            agenturl = self.config_entry.data.get(CONF_AGENTURL)
+
+            if not wkey:
+                raise core.WayznError("No wKey found in config entry")
+            if not agenturl:
+                raise core.WayznError("No agent URL found in config entry")
+
+            # Fetch nonce from nonce DB
+            nonce_data = core.db_get("nonce", f"/{device_id}", id_token)
+            nonce = nonce_data.get("nonce")
+            if not nonce:
+                raise core.WayznError("No nonce found in nonce DB for device")
 
             # Parse wkey to get key bytes
-            knum, key_bytes = core.parse_wkey(ctx["wkey"])
+            knum_parsed, key_bytes = core.parse_wkey(wkey)
 
             # Compute authorization header
             auth_header = core.compute_auth(
-                command, ctx["nonce"], key_bytes, core.DEFAULT_HASH_ALGORITHM
+                command, nonce, key_bytes, core.DEFAULT_HASH_ALGORITHM
             )
 
             # Prepare headers
             headers = {
                 "User-Agent": "wayzn-ha/0.1",
                 "Authorization": auth_header,
-                "x-WayznKNum": str(knum),
+                "x-WayznKNum": str(knum or knum_parsed),
             }
 
             # Send POST request to agent
             response = requests.post(
-                ctx["agenturl"],
+                agenturl,
                 headers=headers,
                 data=command,
                 timeout=20,

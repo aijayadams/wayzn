@@ -2,16 +2,12 @@
 
 import logging
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
-
 from .const import DOMAIN, PLATFORMS
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass, entry) -> bool:
     """Set up Wayzn from a config entry."""
     # Import here to avoid issues at load time
     from .coordinator import WayznDataUpdateCoordinator
@@ -24,8 +20,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Perform first refresh
     try:
         await coordinator.async_config_entry_first_refresh()
-    except ConfigEntryAuthFailed:
-        return False
+    except Exception as e:
+        # ConfigEntryAuthFailed will be imported when needed
+        from homeassistant.exceptions import ConfigEntryAuthFailed
+        if isinstance(e, ConfigEntryAuthFailed):
+            return False
+        raise
 
     # Store coordinator in hass.data
     hass.data[DOMAIN][entry.entry_id] = coordinator
@@ -39,7 +39,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass, entry) -> bool:
     """Unload a config entry."""
     # Unload platforms
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
@@ -51,7 +51,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def async_reload_entry(hass, entry) -> None:
     """Reload config entry."""
     await async_unload_entry(hass, entry)
     await async_setup_entry(hass, entry)
