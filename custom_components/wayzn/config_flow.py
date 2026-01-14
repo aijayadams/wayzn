@@ -5,7 +5,6 @@ from typing import Any, Dict, Optional
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import config_validation as cv
 
 from . import wayzn_core as core
@@ -41,7 +40,7 @@ class WayznConfigFlow(config_entries.ConfigFlow):
 
     async def async_step_user(
         self, user_input: Optional[Dict[str, Any]] = None
-    ) -> FlowResult:
+    ) -> Dict[str, Any]:
         """Handle the initial step - collect Firebase credentials."""
         errors: Dict[str, str] = {}
 
@@ -89,7 +88,7 @@ class WayznConfigFlow(config_entries.ConfigFlow):
 
     async def async_step_device(
         self, user_input: Optional[Dict[str, Any]] = None
-    ) -> FlowResult:
+    ) -> Dict[str, Any]:
         """Handle the device step - collect QR code."""
         errors: Dict[str, str] = {}
 
@@ -106,7 +105,7 @@ class WayznConfigFlow(config_entries.ConfigFlow):
 
                 # Check if already configured
                 await self.async_set_unique_id(device_id)
-                self._abort_if_unique_id_configured()
+                self.async_abort_if_unique_id_configured()
 
                 # Fetch agent URL
                 try:
@@ -162,7 +161,7 @@ class WayznConfigFlow(config_entries.ConfigFlow):
             errors=errors,
         )
 
-    async def async_step_reauth(self, user_input=None) -> FlowResult:
+    async def async_step_reauth(self, user_input: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Handle reauth flow for expired credentials."""
         entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
