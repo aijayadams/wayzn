@@ -38,6 +38,7 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         """Initialize the coordinator."""
         self.config_entry = config_entry
         self._auth_token: Optional[str] = None
+        self._token_expires_at: Optional[float] = None
         self._pending_command: Optional[str] = None
         self._target_state: Optional[str] = None
         self._active_command_start: Optional[float] = None
@@ -45,9 +46,43 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
-            name=f"Wayzn {config_entry.data[CONF_DEVICE_LABEL]}",
+            name=f"Wayzn {config_entry.data.get(CONF_DEVICE_LABEL, 'Dog Door')}",
             update_interval=timedelta(seconds=NORMAL_POLL_INTERVAL),
         )
+
+    def _get_cached_or_fresh_token(
+        self, email: str, password: str, api_key: str, force: bool = False
+    ) -> str:
+        """Get cached auth token if valid, otherwise authenticate fresh.
+
+        This reduces Firebase API calls and prevents hitting password verification quota limits.
+        """
+        import time
+
+        # Check if we have a valid cached token (with 60 second skew for safety)
+        if not force and self._auth_token and self._token_expires_at:
+            if time.time() < (self._token_expires_at - 60):
+                _LOGGER.debug("Using cached authentication token")
+                return self._auth_token
+
+        # Token expired or not cached, authenticate fresh
+        _LOGGER.debug("Authenticating with fresh credentials")
+        auth = core.fb_sign_in_email_password(email, password, api_key)
+        self._auth_token = auth.get("idToken")
+
+        if not self._auth_token:
+            raise core.WayznError("No ID token in response")
+
+        # Store token expiry time
+        try:
+            expires_in = int(auth.get("expiresIn", 3600))
+        except (ValueError, TypeError):
+            expires_in = 3600
+
+        import time
+        self._token_expires_at = time.time() + expires_in
+
+        return self._auth_token
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch device status from Firebase."""
@@ -58,22 +93,17 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
             api_key = self.config_entry.data[CONF_API_KEY]
             device_id = self.config_entry.data[CONF_DEVICE_ID]
 
-            # Authenticate (will use cached token if valid)
+            # Get cached or fresh token (reduces Firebase quota usage)
             try:
-                auth = await self.hass.async_add_executor_job(
-                    core.fb_sign_in_email_password, email, password, api_key
+                id_token = await self.hass.async_add_executor_job(
+                    self._get_cached_or_fresh_token, email, password, api_key
                 )
-                self._auth_token = auth.get("idToken")
-
-                if not self._auth_token:
-                    raise core.WayznError("No ID token in response")
-
             except core.WayznError as e:
                 raise ConfigEntryAuthFailed(f"Authentication failed: {e}") from e
 
             # Fetch device status summary
             status = await self.hass.async_add_executor_job(
-                self._get_status_summary, email, password, api_key, device_id
+                self._get_status_summary, device_id, id_token
             )
 
             # Check if we should adjust polling frequency
@@ -91,21 +121,10 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(f"Unexpected error: {e}") from e
 
     def _get_status_summary(
-        self, email: str, password: str, api_key: str, device_id: str
+        self, device_id: str, id_token: str
     ) -> Dict[str, Any]:
         """Get device status summary (sync function for executor)."""
-        # Create a minimal config structure for wayzn_core
-        # Since wayzn_core expects a config path, we'll work around it
-        # by directly calling the functions it needs
-
         try:
-            # Authenticate to get token
-            auth = core.fb_sign_in_email_password(email, password, api_key)
-            id_token = auth.get("idToken")
-
-            if not id_token:
-                raise core.WayznError("No ID token in response")
-
             # Get device status from tokens database
             status_data = core.db_get("tokens", f"/{device_id}", id_token)
 
@@ -193,8 +212,13 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
                 self._target_state,
             )
 
+            # Get cached or fresh token for command
+            id_token = await self.hass.async_add_executor_job(
+                self._get_cached_or_fresh_token, email, password, api_key
+            )
+
             await self.hass.async_add_executor_job(
-                self._send_command_sync, email, password, api_key, device_id, command
+                self._send_command_sync, device_id, id_token, command
             )
 
             # Trigger immediate refresh to get latest state
@@ -216,18 +240,12 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(f"Unexpected error: {e}") from e
 
     def _send_command_sync(
-        self, email: str, password: str, api_key: str, device_id: str, command: str
+        self, device_id: str, id_token: str, command: str
     ) -> None:
         """Send command to device (sync function for executor)."""
         import requests
 
         try:
-            # Authenticate
-            auth = core.fb_sign_in_email_password(email, password, api_key)
-            id_token = auth.get("idToken")
-
-            if not id_token:
-                raise core.WayznError("No ID token in response")
 
             # Get device info from config entry
             wkey = self.config_entry.data.get(CONF_WKEY)
