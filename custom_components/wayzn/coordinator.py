@@ -106,6 +106,8 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
                 self._get_status_summary, device_id, id_token
             )
 
+            _LOGGER.debug("Device status: controlstate=%s, state=%s", status.get("controlstate"), status.get("state"))
+
             # Check if we should adjust polling frequency
             await self._update_poll_interval(status)
 
