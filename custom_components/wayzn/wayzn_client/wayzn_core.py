@@ -565,7 +565,7 @@ def db_stream(
                 params=params,
                 headers=headers,
                 stream=True,
-                timeout=(10, None),  # 10s connect timeout, no read timeout
+                timeout=(10, 90),  # 10s connect, 90s read (Firebase keep-alives every ~30s)
             )
 
             # Handle auth errors

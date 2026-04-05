@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import threading
+import time
 from datetime import timedelta
 from typing import Any, Dict, Optional
 
@@ -29,6 +30,7 @@ _LOGGER = logging.getLogger(__name__)
 # Polling interval — used as heartbeat/fallback when streaming is active
 HEARTBEAT_POLL_INTERVAL = 120  # seconds (SSE keep-alives arrive every ~30s)
 FALLBACK_POLL_INTERVAL = DEFAULT_POLL_INTERVAL  # 30 seconds when streaming is down
+STREAM_STALE_THRESHOLD = 120  # seconds — if no SSE event in this window, stream is dead
 
 
 class WayznDataUpdateCoordinator(DataUpdateCoordinator):
@@ -49,6 +51,7 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         self._stream_thread: Optional[threading.Thread] = None
         self._stream_stop: threading.Event = threading.Event()
         self._stream_healthy: bool = False
+        self._last_stream_event: float = 0.0  # monotonic timestamp of last SSE event
 
         super().__init__(
             hass,
@@ -126,6 +129,20 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
                 status.get("state"),
                 self._stream_healthy,
             )
+
+            # Staleness watchdog: if stream claims healthy but no events
+            # received in STREAM_STALE_THRESHOLD seconds, restart it
+            if (
+                self._stream_healthy
+                and self._last_stream_event > 0
+                and (time.monotonic() - self._last_stream_event) > STREAM_STALE_THRESHOLD
+            ):
+                _LOGGER.warning(
+                    "SSE: stream stale (no events in %ds), restarting",
+                    int(time.monotonic() - self._last_stream_event),
+                )
+                self.stop_streaming()
+                self.start_streaming()
 
             return status
 
@@ -216,6 +233,7 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
                     break
 
                 if event.event == "keep-alive":
+                    self._last_stream_event = time.monotonic()
                     if not self._stream_healthy:
                         self._stream_healthy = True
                         # Switch to longer heartbeat interval
@@ -227,6 +245,7 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
                 # Handle put/patch events
                 if event.event in ("put", "patch"):
                     self._stream_healthy = True
+                    self._last_stream_event = time.monotonic()
                     new_data = self._extract_state_from_event(event)
                     if new_data is not None:
                         _LOGGER.debug(
