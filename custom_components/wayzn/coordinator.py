@@ -258,8 +258,10 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         controlstate = None
 
         if event.path == "/" and isinstance(event.data, dict):
-            # Full state put — initial data or full refresh
-            controlstate = event.data.get("ControlState")
+            # Full state put or patch at root — only process if ControlState present
+            if "ControlState" not in event.data:
+                return None
+            controlstate = event.data["ControlState"]
         elif event.path == "/ControlState" and event.data is not None:
             # Direct ControlState patch
             controlstate = event.data
