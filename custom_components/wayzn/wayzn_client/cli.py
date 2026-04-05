@@ -361,5 +361,72 @@ def control_close(ctx: AppContext, device_id: Optional[str], id_token: Optional[
     _send_device_command(ctx, "close", device_id, id_token)
 
 
+# ============================================================================
+# Streaming (SSE)
+# ============================================================================
+
+@cli.command("stream")
+@click.option("--device-id", required=False, help="Device ID (auto-select if registry has one device)")
+@click.option("--db", type=click.Choice(sorted(core.FIREBASE_DBS.keys())), default="tokens", show_default=True, help="Database to stream")
+@click.option("--path", "db_path", default=None, help="Override path (default: /{device_id})")
+@click.pass_obj
+def stream_cmd(ctx: AppContext, device_id: Optional[str], db: str, db_path: Optional[str]) -> None:
+    """Stream real-time state changes via Firebase SSE.
+
+    Opens a persistent Server-Sent Events connection to Firebase RTDB
+    and prints events as they arrive. Ctrl+C to stop.
+    """
+    import threading
+    from datetime import datetime
+
+    # Resolve device and auth
+    try:
+        device_id = core.resolve_device_id(device_id, ctx.config)
+    except Exception as e:
+        _handle_error(e)
+
+    try:
+        id_token = core.resolve_id_token(None, ctx.config, ctx.force_login)
+    except Exception as e:
+        _handle_error(e)
+
+    stream_path = db_path or f"/{device_id}"
+
+    def refresh_token() -> str:
+        """Callback to refresh expired auth token."""
+        try:
+            auth = core.get_valid_auth(ctx.config, force=True)
+            return auth["idToken"]
+        except Exception as e:
+            click.echo(f"[token refresh failed: {e}]", err=True)
+            raise
+
+    stop = threading.Event()
+    click.echo(f"Streaming {db}:{stream_path} (Ctrl+C to stop)")
+    click.echo("---")
+
+    try:
+        for event in core.db_stream(db, stream_path, id_token, stop_event=stop, on_auth_expired=refresh_token):
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if event.event == "keep-alive":
+                click.echo(f"[{ts}] keep-alive")
+            else:
+                # For put/patch, show controlstate label if present
+                extra = ""
+                if isinstance(event.data, dict) and "ControlState" in event.data:
+                    cs = event.data["ControlState"]
+                    label = core.controlstate_label(cs)
+                    extra = f"  (ControlState={cs} -> {label})"
+                elif event.path and "ControlState" in (event.path or "") and event.data is not None:
+                    label = core.controlstate_label(event.data)
+                    extra = f"  (-> {label})"
+
+                data_str = json.dumps(event.data, ensure_ascii=False) if event.data is not None else ""
+                click.echo(f"[{ts}] {event.event} {event.path or ''}  {data_str}{extra}")
+    except KeyboardInterrupt:
+        stop.set()
+        click.echo("\nStopped.")
+
+
 if __name__ == "__main__":
     cli()

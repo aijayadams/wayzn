@@ -9,7 +9,6 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass, entry) -> bool:
     """Set up Wayzn from a config entry."""
-    # Import here to avoid issues at load time
     from .coordinator import WayznDataUpdateCoordinator
 
     hass.data.setdefault(DOMAIN, {})
@@ -17,11 +16,10 @@ async def async_setup_entry(hass, entry) -> bool:
     # Create coordinator
     coordinator = WayznDataUpdateCoordinator(hass, entry)
 
-    # Perform first refresh
+    # Perform first refresh (poll)
     try:
         await coordinator.async_config_entry_first_refresh()
     except Exception as e:
-        # ConfigEntryAuthFailed will be imported when needed
         from homeassistant.exceptions import ConfigEntryAuthFailed
         if isinstance(e, ConfigEntryAuthFailed):
             return False
@@ -29,6 +27,9 @@ async def async_setup_entry(hass, entry) -> bool:
 
     # Store coordinator in hass.data
     hass.data[DOMAIN][entry.entry_id] = coordinator
+
+    # Start SSE streaming for real-time state updates
+    await hass.async_add_executor_job(coordinator.start_streaming)
 
     # Forward setup to platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -41,11 +42,15 @@ async def async_setup_entry(hass, entry) -> bool:
 
 async def async_unload_entry(hass, entry) -> bool:
     """Unload a config entry."""
+    # Stop SSE streaming
+    coordinator = hass.data[DOMAIN].get(entry.entry_id)
+    if coordinator:
+        await hass.async_add_executor_job(coordinator.stop_streaming)
+
     # Unload platforms
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:
-        # Remove coordinator
         hass.data[DOMAIN].pop(entry.entry_id)
 
     return unload_ok

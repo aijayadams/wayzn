@@ -12,12 +12,16 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 from pathlib import Path
+import threading
 import time
-from typing import Any, Dict, Optional, Tuple, TypedDict
+from typing import Any, Callable, Dict, Generator, Optional, Tuple, TypedDict
 
 import requests
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class WayznError(RuntimeError):
@@ -456,6 +460,164 @@ def db_shallow(db_key: str, path: str, id_token: str) -> Dict[str, Any]:
     r = requests.get(url, params={"auth": id_token, "shallow": "true"}, headers=_maybe_appcheck_headers(), timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     return r.json()
+
+
+# ============================================================================
+# Firebase RTDB Streaming (Server-Sent Events)
+# ============================================================================
+
+class SSEEvent:
+    """Parsed Server-Sent Event from Firebase RTDB streaming."""
+
+    __slots__ = ("event", "path", "data")
+
+    def __init__(self, event: str, path: Optional[str], data: Any) -> None:
+        self.event = event    # "put", "patch", "keep-alive", "cancel", "auth_revoked"
+        self.path = path      # e.g. "/" or "/ControlState"
+        self.data = data      # parsed JSON payload (None for keep-alive)
+
+    def __repr__(self) -> str:
+        return f"SSEEvent(event={self.event!r}, path={self.path!r}, data={self.data!r})"
+
+
+def _parse_sse_lines(line_iter) -> Generator[SSEEvent, None, None]:
+    """Parse raw SSE text lines into SSEEvent objects.
+
+    Firebase SSE format:
+        event: put
+        data: {"path":"/","data":{"ControlState":14}}
+
+        event: keep-alive
+        data: null
+    """
+    current_event = None
+    current_data = None
+
+    for raw_line in line_iter:
+        # Handle both bytes and str
+        line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+        line = line.rstrip("\n").rstrip("\r")
+
+        if line.startswith("event:"):
+            current_event = line[len("event:"):].strip()
+        elif line.startswith("data:"):
+            current_data = line[len("data:"):].strip()
+        elif line == "":
+            # Empty line = end of event block
+            if current_event is not None:
+                if current_event == "keep-alive":
+                    yield SSEEvent(event="keep-alive", path=None, data=None)
+                elif current_event in ("cancel", "auth_revoked"):
+                    yield SSEEvent(event=current_event, path=None, data=None)
+                elif current_data:
+                    try:
+                        parsed = json.loads(current_data)
+                        evt_path = parsed.get("path") if isinstance(parsed, dict) else None
+                        evt_data = parsed.get("data") if isinstance(parsed, dict) else parsed
+                        yield SSEEvent(event=current_event, path=evt_path, data=evt_data)
+                    except json.JSONDecodeError:
+                        _LOGGER.warning("SSE: failed to parse data JSON: %s", current_data[:200])
+                current_event = None
+                current_data = None
+
+
+def db_stream(
+    db_key: str,
+    path: str,
+    id_token: str,
+    stop_event: Optional[threading.Event] = None,
+    on_auth_expired: Optional[Callable[[], str]] = None,
+) -> Generator[SSEEvent, None, None]:
+    """Open an SSE streaming connection to Firebase RTDB.
+
+    Yields SSEEvent objects as they arrive. Handles:
+    - Automatic reconnection with exponential backoff (1s → 2s → 4s → ... → 60s)
+    - Auth token refresh on 401 or "auth_revoked" events
+    - Cancellation via stop_event
+
+    Args:
+        db_key: Firebase database key (e.g. "tokens")
+        path: Database path (e.g. "/{device_id}")
+        id_token: Firebase auth token
+        stop_event: threading.Event to signal shutdown
+        on_auth_expired: callback that returns a fresh id_token when auth expires
+    """
+    if stop_event is None:
+        stop_event = threading.Event()
+
+    backoff = 1.0
+    max_backoff = 60.0
+    current_token = id_token
+
+    while not stop_event.is_set():
+        url = db_url(db_key, path)
+        headers = {
+            "Accept": "text/event-stream",
+        }
+        headers.update(_maybe_appcheck_headers())
+        params = {"auth": current_token}
+
+        response = None
+        try:
+            _LOGGER.debug("SSE: connecting to %s:%s", db_key, path)
+            response = requests.get(
+                url,
+                params=params,
+                headers=headers,
+                stream=True,
+                timeout=(10, None),  # 10s connect timeout, no read timeout
+            )
+
+            # Handle auth errors
+            if response.status_code == 401:
+                _LOGGER.warning("SSE: 401 Unauthorized, refreshing token")
+                if on_auth_expired:
+                    current_token = on_auth_expired()
+                    backoff = 1.0
+                    continue
+                else:
+                    raise WayznError("SSE: 401 and no auth refresh callback")
+
+            response.raise_for_status()
+
+            # Connected successfully, reset backoff
+            backoff = 1.0
+            _LOGGER.debug("SSE: connected, streaming events")
+
+            # Iterate over SSE lines
+            for event in _parse_sse_lines(response.iter_lines()):
+                if stop_event.is_set():
+                    return
+
+                # Handle auth revocation mid-stream
+                if event.event in ("cancel", "auth_revoked"):
+                    _LOGGER.warning("SSE: received %s, refreshing token", event.event)
+                    if on_auth_expired:
+                        current_token = on_auth_expired()
+                    break  # Reconnect
+
+                yield event
+
+        except requests.exceptions.ConnectionError as e:
+            _LOGGER.debug("SSE: connection error: %s", e)
+        except requests.exceptions.Timeout as e:
+            _LOGGER.debug("SSE: timeout: %s", e)
+        except requests.exceptions.HTTPError as e:
+            _LOGGER.warning("SSE: HTTP error: %s", e)
+        except Exception as e:
+            _LOGGER.warning("SSE: unexpected error: %s", e)
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+
+        # Backoff before reconnecting
+        if not stop_event.is_set():
+            _LOGGER.debug("SSE: reconnecting in %.1fs", backoff)
+            stop_event.wait(backoff)
+            backoff = min(backoff * 2, max_backoff)
 
 
 
