@@ -9,6 +9,8 @@ A Python CLI and Home Assistant integration for controlling Wayzn smart petdoors
 - 📱 Register devices from QR codes
 - 🔍 Check device status
 - 🔓 Open/close your petdoor remotely
+- 🗓️ Read the door's schedule
+- ⚙️ Change settings (dog size so far), verified by read-back
 - 🔬 Debug Firebase RTDB directly
 
 ### Home Assistant Integration
@@ -143,6 +145,27 @@ If you have multiple devices, specify one:
 python wayzn.py control open --device-id 4000000012345abcd
 ```
 
+### Read the Schedule 🗓️
+```bash
+python wayzn.py schedule          # human-readable
+python wayzn.py schedule --json   # structured
+```
+
+Shows, per day (Sun–Sat), the windows during which the door operates via
+motion detection and connected devices. Outside every window it does not
+auto-open. Read-only. Format details: [docs/PROTOCOL.md](docs/PROTOCOL.md#schedule).
+
+### Change Settings ⚙️
+```bash
+python wayzn.py settings dog-size small    # small | medium | large
+```
+
+Each setter sends a signed command to the door, then polls the device state
+until the field reads back as written; it exits non-zero if it doesn't within
+30s, and stops without retrying if the agent reports a bad key (a bad key can
+cost one of the door's 20 key slots). Only allowlisted setters exist; see
+[docs/PROTOCOL.md](docs/PROTOCOL.md#commands) for which commands are verified.
+
 ## Advanced Usage 🔧
 
 ### Debug Commands
@@ -179,8 +202,12 @@ python wayzn.py --config /path/to/custom_config.json devices
 
 ## Architecture 🏗️
 
-- **wayzn_core.py**: Core library handling Firebase auth, RTDB operations, device control
-- **wayzn.py**: CLI layer using Click framework
+- **custom_components/wayzn/**: The Home Assistant integration. Its
+  `wayzn_client/` package is the shared library (`wayzn_core.py`) and CLI
+  (`cli.py`), so the CLI and HA always run the same code.
+- **wayzn.py**: Convenience entrypoint for the CLI
+- **AGENTS.md**: Governing principles (state honesty, bias to open); read before changing the integration
+- **docs/PROTOCOL.md**: What we know about the Wayzn cloud/device protocol
 - **wayzn_config.json**: Static configuration (credentials, device registry)
 - **.wayzn_auth_cache.json**: Auto-managed auth token cache (do not edit)
 
@@ -195,6 +222,11 @@ python wayzn.py --config /path/to/custom_config.json devices
 5. **Sign Command** → Compute HMAC-SHA256 signature of command with nonce
 6. **Send Request** → POST to agent URL with signed headers
 7. **Get Response** → Device executes command and returns status
+
+### Deployment
+
+Home Assistant on hass.in.waveb.io is deployed from this repo by the `hass`
+role in waveb-priv (`./waveb ansible run --limit hass.in.waveb.io --tags hass-wayzn`).
 
 ### Authentication 🔐
 
