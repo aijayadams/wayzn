@@ -8,6 +8,7 @@ status querying, and device control operations.
 
 import json
 import os
+import time
 from typing import Any, Dict, Optional
 
 import click
@@ -326,7 +327,7 @@ def control_group() -> None:
     """Send commands to devices via Electric Imp agent."""
 
 
-def _send_device_command(ctx: AppContext, action: str, device_id: Optional[str], id_token: Optional[str]) -> None:
+def _send_device_command(ctx: AppContext, action: str, device_id: Optional[str], id_token: Optional[str]) -> str:
     """Send a command to a device.
 
     Flow:
@@ -361,6 +362,7 @@ def _send_device_command(ctx: AppContext, action: str, device_id: Optional[str],
     except Exception as e:
         click.echo(f"Request failed: {e}", err=True)
         raise SystemExit(1)
+    return r.text
 
 
 @control_group.command("open")
@@ -379,6 +381,50 @@ def control_open(ctx: AppContext, device_id: Optional[str], id_token: Optional[s
 def control_close(ctx: AppContext, device_id: Optional[str], id_token: Optional[str]) -> None:
     """Close device (e.g., lock a petdoor)."""
     _send_device_command(ctx, "close", device_id, id_token)
+
+
+# ============================================================================
+# Settings (signed agent commands, each verified by reading state back)
+# ============================================================================
+
+# Values from the app's motion-sensor screen (_DogSizePickerState).
+DOG_SIZE_VALUES = {"small": 1, "medium": 2, "large": 4}
+
+
+@cli.group("settings")
+def settings_group() -> None:
+    """Change device settings; each setter reads the state back to verify."""
+
+
+def _set_and_verify(ctx: AppContext, field: str, value: Any, device_id: Optional[str], timeout_s: int = 30) -> None:
+    """Send '<field>:<value>' and poll tokens:/{device_id} until field reads back as value."""
+    before = core.get_status(ctx.config, ctx.force_login, None, device_id, "tokens", None).get(field)
+    click.echo(f"{field} before: {before!r}")
+
+    reply = _send_device_command(ctx, f"{field}:{value}", device_id, None)
+    if "bad key" in reply.lower() or "deleted" in reply.lower():
+        click.echo("Agent rejected the key; not retrying.", err=True)
+        raise SystemExit(1)
+
+    deadline = time.monotonic() + timeout_s
+    while True:
+        current = core.get_status(ctx.config, False, None, device_id, "tokens", None).get(field)
+        if current == value:
+            click.echo(f"{field} after:  {current!r} (verified)")
+            return
+        if time.monotonic() > deadline:
+            click.echo(f"{field} still {current!r} after {timeout_s}s; expected {value!r}", err=True)
+            raise SystemExit(1)
+        time.sleep(3)
+
+
+@settings_group.command("dog-size")
+@click.argument("size", type=click.Choice(sorted(DOG_SIZE_VALUES)))
+@click.option("--device-id", required=False, help="Device ID (auto-select if registry has one device)")
+@click.pass_obj
+def settings_dog_size(ctx: AppContext, size: str, device_id: Optional[str]) -> None:
+    """Set motion-detection dog size (GrideyeCountThreshold)."""
+    _set_and_verify(ctx, "GrideyeCountThreshold", DOG_SIZE_VALUES[size], device_id)
 
 
 # ============================================================================
