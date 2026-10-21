@@ -23,6 +23,14 @@
         "data": {
           "password": "Password"
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate with Wayzn",
+        "description": "Your Wayzn credentials or Firebase API key are invalid. Please update them below. Email: {email}",
+        "data": {
+          "password": "Password",
+          "api_key": "Firebase API Key (leave unchanged if only password expired)"
+        }
       }
     },
     "error": {

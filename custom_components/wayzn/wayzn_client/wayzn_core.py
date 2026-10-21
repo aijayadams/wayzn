@@ -173,13 +173,14 @@ def save_config(cfg: ConfigData, path: Optional[str] = None) -> None:
 # Firebase authentication
 # ============================================================================
 
-def fb_sign_in_email_password(email: str, password: str, api_key: str) -> Dict[str, Any]:
+def fb_sign_in_email_password(email: str, password: str, api_key: str, timeout: int = REQUEST_TIMEOUT) -> Dict[str, Any]:
     """Sign in to Firebase using email/password.
 
     Args:
         email: Firebase account email
         password: Firebase account password
         api_key: Firebase API key from config
+        timeout: Request timeout in seconds (default REQUEST_TIMEOUT)
 
     Returns a dict with fields:
       - idToken: JWT for API calls
@@ -189,7 +190,7 @@ def fb_sign_in_email_password(email: str, password: str, api_key: str) -> Dict[s
     """
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
     payload = {"email": email, "password": password, "returnSecureToken": True}
-    r = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
+    r = requests.post(url, json=payload, timeout=timeout)
     if r.status_code >= 400:
         try:
             err = r.json()
@@ -527,6 +528,7 @@ def db_stream(
     id_token: str,
     stop_event: Optional[threading.Event] = None,
     on_auth_expired: Optional[Callable[[], str]] = None,
+    on_response: Optional[Callable] = None,
 ) -> Generator[SSEEvent, None, None]:
     """Open an SSE streaming connection to Firebase RTDB.
 
@@ -541,6 +543,8 @@ def db_stream(
         id_token: Firebase auth token
         stop_event: threading.Event to signal shutdown
         on_auth_expired: callback that returns a fresh id_token when auth expires
+        on_response: callback(response) when a new HTTP response is established,
+                     allowing callers to close it externally to unblock iter_lines
     """
     if stop_event is None:
         stop_event = threading.Event()
@@ -565,12 +569,15 @@ def db_stream(
                 params=params,
                 headers=headers,
                 stream=True,
-                timeout=(10, 90),  # 10s connect, 90s read (Firebase keep-alives every ~30s)
+                timeout=(10, 35),  # 10s connect, 35s read (Firebase keep-alives every ~30s)
             )
 
             # Handle auth errors
             if response.status_code == 401:
                 _LOGGER.warning("SSE: 401 Unauthorized, refreshing token")
+                if stop_event.is_set():
+                    _LOGGER.debug("SSE: stop requested during 401 handling, exiting")
+                    return
                 if on_auth_expired:
                     current_token = on_auth_expired()
                     backoff = 1.0
@@ -584,14 +591,33 @@ def db_stream(
             backoff = 1.0
             _LOGGER.debug("SSE: connected, streaming events")
 
-            # Iterate over SSE lines
-            for event in _parse_sse_lines(response.iter_lines()):
+            # Expose response to caller so it can force-close on shutdown
+            if on_response is not None:
+                on_response(response)
+
+            # Iterate over SSE lines using readline() instead of iter_lines().
+            # Firebase SSE with Connection:close and no Transfer-Encoding
+            # causes requests' iter_content(chunk_size).read(N) to block
+            # trying to fill the buffer. readline() returns at each \n.
+            def _readline_iter():
+                while not (stop_event and stop_event.is_set()):
+                    line = response.raw.readline()
+                    if not line:
+                        break  # EOF / connection closed
+                    if isinstance(line, bytes):
+                        line = line.decode("utf-8", errors="replace")
+                    yield line
+
+            for event in _parse_sse_lines(_readline_iter()):
                 if stop_event.is_set():
                     return
 
                 # Handle auth revocation mid-stream
                 if event.event in ("cancel", "auth_revoked"):
                     _LOGGER.warning("SSE: received %s, refreshing token", event.event)
+                    if stop_event.is_set():
+                        _LOGGER.debug("SSE: stop requested during auth revoke handling, exiting")
+                        return
                     if on_auth_expired:
                         current_token = on_auth_expired()
                     break  # Reconnect
@@ -607,6 +633,9 @@ def db_stream(
         except Exception as e:
             _LOGGER.warning("SSE: unexpected error: %s", e)
         finally:
+            # Clear response reference before closing
+            if on_response is not None:
+                on_response(None)
             if response is not None:
                 try:
                     response.close()

@@ -69,11 +69,17 @@ class WayznCover(CoordinatorEntity, CoverEntity):
 
     @property
     def is_closed(self) -> Optional[bool]:
-        """Return if cover is closed."""
+        """Return if cover is closed.
+
+        "unknown" (unmapped ControlState) returns None — HA renders the
+        entity as unknown rather than confidently lying about direction.
+        """
         if self.coordinator.data is None:
             return None
 
         state = self.coordinator.data.get("state")
+        if state == "unknown":
+            return None
         closed_states = ["closed", "locked", "locked_or_ajar", "disengaged"]
         return state in closed_states
 
@@ -95,8 +101,25 @@ class WayznCover(CoordinatorEntity, CoverEntity):
 
     @property
     def available(self) -> bool:
-        """Return if entity is available."""
-        return self.coordinator.last_update_success
+        """Return if entity is available.
+
+        Unavailable when the coordinator's last update failed OR when the
+        coordinator has flagged its data as stale (cloud TimeStamp too old /
+        SSE stream dead beyond the watchdog). A wrong "open" is worse than an
+        honest "unavailable" — 2026-08-11: HA showed "open" for ~6h on a
+        physically closed door.
+
+        Note: this never gates commands. async_open_cover/async_close_cover
+        always send to the device regardless of believed state.
+        """
+        coordinator: WayznDataUpdateCoordinator = self.coordinator
+        return coordinator.last_update_success and not coordinator.stale
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Link-health diagnostics — one attribute view answers "is it healthy?"."""
+        coordinator: WayznDataUpdateCoordinator = self.coordinator
+        return coordinator.diagnostics
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         """Open the cover."""

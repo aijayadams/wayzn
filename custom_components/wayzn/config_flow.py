@@ -37,6 +37,7 @@ class WayznConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize the config flow."""
         self._credentials: Dict[str, str] = {}
         self._device_info: Dict[str, Any] = {}
+        self._reauth_entry = None
 
     async def async_step_user(
         self, user_input: Optional[Dict[str, Any]] = None
@@ -157,4 +158,75 @@ class WayznConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+        )
+
+    # ------------------------------------------------------------------
+    # Reauth flow — triggered by HA when ConfigEntryAuthFailed is raised
+    # ------------------------------------------------------------------
+
+    async def async_step_reauth(
+        self, entry_data: Dict[str, Any]
+    ) -> ConfigFlowResult:
+        """Handle reauth trigger from HA (credentials expired / API key invalid)."""
+        self._reauth_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ) -> ConfigFlowResult:
+        """Show reauth form and validate new credentials."""
+        errors: Dict[str, str] = {}
+
+        if user_input is not None:
+            try:
+                from .wayzn_client import wayzn_core as core
+
+                entry = self._reauth_entry
+                email = entry.data[CONF_EMAIL]
+                password = user_input[CONF_PASSWORD]
+                api_key = user_input.get(CONF_API_KEY, entry.data.get(CONF_API_KEY, ""))
+
+                # Test authentication with the new credentials
+                auth = await self.hass.async_add_executor_job(
+                    core.fb_sign_in_email_password, email, password, api_key
+                )
+
+                if not auth.get("idToken"):
+                    errors["base"] = ERROR_AUTH_FAILED
+                else:
+                    # Auth succeeded — update the config entry with new credentials
+                    new_data = {**entry.data}
+                    new_data[CONF_PASSWORD] = password
+                    if api_key:
+                        new_data[CONF_API_KEY] = api_key
+
+                    self.hass.config_entries.async_update_entry(
+                        entry, data=new_data
+                    )
+                    await self.hass.config_entries.async_reload(entry.entry_id)
+                    return self.async_abort(reason="reauth_successful")
+
+            except Exception as e:
+                _LOGGER.error("Reauth failed: %s", e)
+                errors["base"] = ERROR_AUTH_FAILED
+
+        # Pre-fill the current API key so the user can see / change it
+        current_api_key = ""
+        if self._reauth_entry:
+            current_api_key = self._reauth_entry.data.get(CONF_API_KEY, "")
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_PASSWORD): cv.string,
+                    vol.Optional(CONF_API_KEY, default=current_api_key): cv.string,
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "email": self._reauth_entry.data.get(CONF_EMAIL, "") if self._reauth_entry else "",
+            },
         )
