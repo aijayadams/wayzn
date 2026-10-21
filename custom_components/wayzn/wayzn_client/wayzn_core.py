@@ -17,9 +17,11 @@ import os
 from pathlib import Path
 import threading
 import time
+from datetime import datetime
 from typing import Any, Callable, Dict, Generator, Optional, Tuple, TypedDict
 
 import requests
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -835,3 +837,74 @@ def get_status_summary(
         "controlstate": controlstate,
         "state": controlstate_label(controlstate),
     }
+
+
+# ============================================================================
+# Schedule (read-only)
+# ============================================================================
+
+# The app's schedule screen lists days Sun..Sat as dayNum 0..6.
+SCHEDULE_DAY_NAMES = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+
+
+def _schedule_time_of_day(epoch: Any, tz: ZoneInfo) -> str:
+    """Convert a schedule timestamp to local HH:MM.
+
+    The app writes each window edge as the epoch of a wall-clock time on a
+    fixed anchor date (2021-10-25) in the device's TimeZone, and reads it back
+    the same way; only the time of day is meaningful. Firebase has returned
+    these as both ints and strings.
+    """
+    return datetime.fromtimestamp(int(epoch), tz).strftime("%H:%M")
+
+
+def parse_schedule(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract the schedule from a tokens:/{device_id} node.
+
+    Source shape: Schedule.schedule = [{"day": 0-6, "active_times":
+    [{"start": <epoch>, "end": <epoch>}, ...]}, ...]. A window is when the
+    door operates via motion detection and connected devices (app wording);
+    outside every window it does not auto-open. Raises WayznError rather than
+    guessing when the fields needed to decode it are missing.
+    """
+    schedule = (data.get("Schedule") or {}).get("schedule")
+    if not isinstance(schedule, list):
+        raise WayznError("Device node has no Schedule.schedule list")
+    tz_name = str(data.get("TimeZone") or "").replace("\\", "")
+    if not tz_name:
+        raise WayznError("Device node has no TimeZone; cannot decode schedule times")
+    try:
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError) as e:
+        raise WayznError(f"Unknown device TimeZone {tz_name!r}") from e
+
+    days = []
+    for entry in sorted(schedule, key=lambda e: int(e["day"])):
+        day = int(entry["day"])
+        windows = [
+            {
+                "start": _schedule_time_of_day(w["start"], tz),
+                "end": _schedule_time_of_day(w["end"], tz),
+            }
+            for w in sorted(entry.get("active_times") or [], key=lambda w: int(w["start"]))
+        ]
+        days.append({"day": day, "name": SCHEDULE_DAY_NAMES[day], "active_times": windows})
+
+    return {
+        "enabled": data.get("ScheduleEnabled"),
+        "timezone": tz_name,
+        "days": days,
+    }
+
+
+def get_schedule(
+    cfg_path: Optional[str],
+    force_login: bool,
+    id_token: Optional[str],
+    device_id: Optional[str],
+) -> Dict[str, Any]:
+    """Fetch the device node and return its decoded schedule."""
+    data = get_status(cfg_path, force_login, id_token, device_id, "tokens", None)
+    if not isinstance(data, dict):
+        raise WayznError("Device node is empty or not an object")
+    return parse_schedule(data)

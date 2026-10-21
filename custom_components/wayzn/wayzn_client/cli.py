@@ -170,6 +170,26 @@ def status_cmd(
     click.echo(json.dumps(data, indent=2 if (verbose and pretty) else None, ensure_ascii=False))
 
 
+@cli.command("schedule")
+@click.option("--device-id", required=False, help="Device ID (Imp_ID)")
+@click.option("--id-token", default=None, help="Firebase ID token (optional)")
+@click.option("--json", "as_json", is_flag=True, help="Emit decoded schedule as JSON")
+@click.pass_obj
+def schedule_cmd(ctx: AppContext, device_id: Optional[str], id_token: Optional[str], as_json: bool) -> None:
+    """Show the door's schedule (read-only)."""
+    try:
+        sched = core.get_schedule(ctx.config, ctx.force_login, id_token, device_id)
+    except Exception as e:
+        _handle_error(e)
+    if as_json:
+        click.echo(json.dumps(sched, indent=2))
+        return
+    click.echo(f"Schedule enabled: {sched['enabled']}  (timezone {sched['timezone']})")
+    for day in sched["days"]:
+        windows = ", ".join(f"{w['start']}-{w['end']}" for w in day["active_times"]) or "(none)"
+        click.echo(f"  {day['name']}: {windows}")
+
+
 
 # ============================================================================
 # Debug commands (Firebase RTDB inspection)
