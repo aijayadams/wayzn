@@ -18,6 +18,7 @@ A Python CLI and Home Assistant integration for controlling Wayzn smart petdoors
 - 🔐 Config flow for easy setup
 - 📊 Real-time status updates
 - 🎛️ Open/close controls from Home Assistant UI
+- 🗓️ Schedule and door settings as read-only sensors (see below)
 - 🔌 Support for multiple devices
 
 ## Installation
@@ -52,6 +53,31 @@ You'll need:
 - **Password**: Your Wayzn account password
 - **Firebase API Key**: Get from Wayzn's Firebase console
 - **QR Code**: Scan the QR code from your device (format: `QR-Code:base64key:knum:device_id:label`)
+
+#### Entities
+
+All entities belong to the door's device. Settings sensors refresh on every
+coordinator poll (at most every 120s); door state also updates in real time
+over SSE. Like the cover, every entity goes **unavailable** when the cloud
+data is stale, and a field the door didn't report shows **unknown**, never a
+default.
+
+| Entity | Type | Shows |
+|---|---|---|
+| Dog Door | cover | Door state; open/close |
+| Schedule today | sensor | Today's windows, e.g. `00:00–05:30, 07:30–20:51`; attributes hold every day, `enabled`, `timezone` |
+| In schedule window | binary_sensor | On while the clock is inside one of today's windows (re-evaluated each minute; independent of "Schedule enabled") |
+| Schedule enabled | binary_sensor | `ScheduleEnabled` |
+| Dog size | sensor | small / medium / large |
+| Motion sensitivity | sensor | % as the app's slider shows it; attribute `detection_threshold` (raw) |
+| Motion detection area | sensor | Enabled cells of the 20-cell sensor mask; attributes `mask`, `grid` (4×5, inferred) |
+| Open distance | sensor | Inches; attributes `max_open_distance_in`, `open_to_counts` |
+| Hold open time | sensor | e.g. `15 s`, `2 min`, `Remain open`; attribute `seconds` |
+| Auto-open on motion / pet tag (home / away) | binary_sensor ×4 | The app's open-mode settings |
+| Away mode, Obstruction detection, Physical button | binary_sensor | The matching settings |
+| Firmware (Imp / motor controller / pet tag receiver), Pet tag receiver, Location automation | diagnostic | Versions and receiver connectivity |
+
+Changing settings from Home Assistant is not supported yet; use the CLI.
 
 ## Configuration
 

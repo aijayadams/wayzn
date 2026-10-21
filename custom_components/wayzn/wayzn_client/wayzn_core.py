@@ -908,3 +908,107 @@ def get_schedule(
     if not isinstance(data, dict):
         raise WayznError("Device node is empty or not an object")
     return parse_schedule(data)
+
+
+def schedule_today(schedule: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Return today's schedule entry (in the device time zone) from parse_schedule output."""
+    tz = ZoneInfo(schedule["timezone"])
+    now = now.astimezone(tz) if now else datetime.now(tz)
+    day_num = (now.weekday() + 1) % 7  # Python Mon=0; schedule Sun=0
+    for day in schedule["days"]:
+        if day["day"] == day_num:
+            return day
+    return {"day": day_num, "name": SCHEDULE_DAY_NAMES[day_num], "active_times": []}
+
+
+def schedule_window_active(schedule: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """True if `now` falls inside one of today's windows (minute resolution, ends inclusive)."""
+    tz = ZoneInfo(schedule["timezone"])
+    now = now.astimezone(tz) if now else datetime.now(tz)
+    hm = now.strftime("%H:%M")
+    return any(w["start"] <= hm <= w["end"] for w in schedule_today(schedule, now)["active_times"])
+
+
+# ============================================================================
+# Settings (read-only decode of tokens:/{device_id})
+# ============================================================================
+
+# Units and enums from the app; see docs/PROTOCOL.md.
+MOTOR_COUNTS_PER_INCH = 767
+MOTION_THRESHOLD_MAX = 3.5
+DOG_SIZE_BY_COUNT = {1: "small", 2: "medium", 4: "large"}
+
+
+def format_open_wait(seconds: Optional[int]) -> Optional[str]:
+    """Render OpenWait the way the app labels it."""
+    if seconds is None:
+        return None
+    if seconds < 0:
+        return "Remain open"
+    if seconds < 60:
+        return f"{seconds} s"
+    return f"{seconds // 60} min"
+
+
+def extract_settings(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Decode the door's settings from a tokens:/{device_id} node.
+
+    Missing fields decode to None rather than a default: a setting we did not
+    read is unknown, not off.
+    """
+    def num(key: str) -> Optional[float]:
+        try:
+            return float(data[key])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def flag(key: str, obj: Dict[str, Any] = data) -> Optional[bool]:
+        value = obj.get(key)
+        return bool(value) if isinstance(value, (bool, int)) else None
+
+    count = num("GrideyeCountThreshold")
+    threshold = num("GrideyeDetectionThreshold")
+    open_to = num("OpenTo")
+    door_offset = num("DoorOffset")
+    open_wait = num("OpenWait")
+    mask = data.get("Mask") if isinstance(data.get("Mask"), list) else None
+    bridge = data.get("Bridge") if isinstance(data.get("Bridge"), dict) else {}
+
+    try:
+        schedule: Optional[Dict[str, Any]] = parse_schedule(data)
+    except (WayznError, KeyError, TypeError, ValueError):
+        schedule = None
+
+    return {
+        "dog_size": DOG_SIZE_BY_COUNT.get(int(count)) if count is not None else None,
+        "grideye_count_threshold": int(count) if count is not None else None,
+        "motion_sensitivity_pct": (
+            round((1 - threshold / MOTION_THRESHOLD_MAX) * 100) if threshold is not None else None
+        ),
+        "grideye_detection_threshold": threshold,
+        "detection_mask": mask,
+        "detection_cells_enabled": sum(1 for c in mask if c) if mask is not None else None,
+        "open_distance_in": round(-open_to / MOTOR_COUNTS_PER_INCH, 1) if open_to is not None else None,
+        "max_open_distance_in": (
+            round(door_offset / MOTOR_COUNTS_PER_INCH, 1) if door_offset is not None else None
+        ),
+        "open_to_counts": int(open_to) if open_to is not None else None,
+        "open_wait_s": int(open_wait) if open_wait is not None else None,
+        "open_wait": format_open_wait(int(open_wait)) if open_wait is not None else None,
+        "auto_open": flag("AutoOpen"),
+        "auto_open_pet_tag": flag("AutoOpenPetTag"),
+        "away_auto_open": flag("AwayAutoOpen"),
+        "away_auto_open_pet_tag": flag("AwayAutoOpenPetTag"),
+        "away_mode": flag("AwaySettings"),
+        "allow_location_automation": flag("AllowLocationAutomation"),
+        "obstruction_detection": flag("ObstructionDetection"),
+        "button_enabled": flag("ButtonOperation"),
+        "led_brightness": num("LedBrightness"),
+        "schedule_enabled": flag("ScheduleEnabled"),
+        "schedule": schedule,
+        "pet_tag_receiver_connected": flag("Connected", bridge),
+        "firmware_imp": data.get("IMP_V"),
+        "firmware_stm": data.get("STM_V"),
+        "firmware_pet_tag_receiver": data.get("Bridge_App_on_WSPD"),
+    }
+

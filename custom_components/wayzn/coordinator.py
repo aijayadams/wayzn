@@ -379,6 +379,9 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
                 "controlstate": controlstate,
                 "state": resolved,
                 "cloud_timestamp": cloud_ts,
+                # Settings ride along on the poll (heartbeat ≤120s); SSE only
+                # carries door state, see _async_apply_sse_state.
+                "settings": core.extract_settings(status_data) if isinstance(status_data, dict) else {},
             }
         except core.WayznError as e:
             raise e
@@ -794,7 +797,7 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
 
                         # Trust SSE state directly — no grace window suppression
                         self.hass.loop.call_soon_threadsafe(
-                            self.async_set_updated_data, new_data
+                            self._async_apply_sse_state, new_data
                         )
                     elif is_full_state:
                         # Full state put but no ControlState found — this is
@@ -821,6 +824,14 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
                 self.hass.loop.call_soon_threadsafe(
                     self._set_fallback_interval
                 )
+
+    def _async_apply_sse_state(self, new_data: Dict[str, Any]) -> None:
+        """Apply an SSE door-state update without dropping poll-only data.
+
+        SSE events carry only controlstate/state; settings come from polls.
+        Runs on the event loop so self.data is read and written in one place.
+        """
+        self.async_set_updated_data({**(self.data or {}), **new_data})
 
     def _extract_state_from_event(self, event: core.SSEEvent) -> Optional[Dict[str, Any]]:
         """Extract ControlState from an SSE event and return status dict.
