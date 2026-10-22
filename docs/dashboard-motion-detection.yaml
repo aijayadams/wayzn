@@ -1,0 +1,215 @@
+# Motion Detection card for a Home Assistant dashboard (paste into a card's
+# YAML editor). Top: live image, as the Wayzn app draws it (green enabled,
+# grey disabled, orange = motion now). Bottom: tap a cell to toggle it.
+# Entity IDs assume the device is named "Dog Door Direct" in the Living Room
+# area; adjust the prefix if yours differs.
+type: vertical-stack
+cards:
+  - type: picture-entity
+    entity: image.living_room_dog_door_direct_motion_detection_area
+    show_name: false
+    show_state: false
+  - type: grid
+    columns: 4
+    square: true
+    cards:
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_1_col_1
+        name: "1·1"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_1_col_2
+        name: "1·2"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_1_col_3
+        name: "1·3"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_1_col_4
+        name: "1·4"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_2_col_1
+        name: "2·1"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_2_col_2
+        name: "2·2"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_2_col_3
+        name: "2·3"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_2_col_4
+        name: "2·4"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_3_col_1
+        name: "3·1"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_3_col_2
+        name: "3·2"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_3_col_3
+        name: "3·3"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_3_col_4
+        name: "3·4"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_4_col_1
+        name: "4·1"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_4_col_2
+        name: "4·2"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_4_col_3
+        name: "4·3"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_4_col_4
+        name: "4·4"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_5_col_1
+        name: "5·1"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_5_col_2
+        name: "5·2"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_5_col_3
+        name: "5·3"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle
+      - type: tile
+        entity: switch.living_room_dog_door_direct_detection_cell_row_5_col_4
+        name: "5·4"
+        vertical: true
+        hide_state: true
+        color: green
+        tap_action:
+          action: toggle
+        icon_tap_action:
+          action: toggle

@@ -18,7 +18,7 @@ from pathlib import Path
 import threading
 import time
 from datetime import datetime
-from typing import Any, Callable, Dict, Generator, Optional, Tuple, TypedDict
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, TypedDict
 
 import requests
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -939,6 +939,33 @@ MOTION_THRESHOLD_MAX = 3.5
 DOG_SIZE_BY_COUNT = {1: "small", 2: "medium", 4: "large"}
 
 
+MASK_COLUMNS = 4
+MASK_ROWS = 5
+
+
+def mask_cell_index(row: int, col: int) -> int:
+    """Index into Mask for a 1-based (row, col); row 1 is the top, col 1 is next to the door."""
+    if not (1 <= row <= MASK_ROWS and 1 <= col <= MASK_COLUMNS):
+        raise WayznError(f"No detection cell at row {row}, col {col}")
+    return (row - 1) * MASK_COLUMNS + (col - 1)
+
+
+def decode_mask(mask: Optional[List[Any]]) -> Dict[str, Any]:
+    """Settings fields derived from Mask (two bits per cell: bit 0 enabled, bit 1 motion now)."""
+    if mask is None:
+        return {"detection_mask": None, "detection_cells_enabled": None, "detection_cells_with_motion": None}
+    return {
+        "detection_mask": [int(c) for c in mask],
+        "detection_cells_enabled": sum(1 for c in mask if int(c) & 1),
+        "detection_cells_with_motion": [i for i, c in enumerate(mask) if int(c) & 2],
+    }
+
+
+def update_mask_command(current_value: int, cell: int) -> str:
+    """The app's cell toggle: 'updateMask:<current XOR 1>:<cell>' (flips the enabled bit)."""
+    return f"updateMask:{int(current_value) ^ 1}:{cell}"
+
+
 def format_open_wait(seconds: Optional[int]) -> Optional[str]:
     """Render OpenWait the way the app labels it."""
     if seconds is None:
@@ -986,8 +1013,8 @@ def extract_settings(data: Dict[str, Any]) -> Dict[str, Any]:
             round((1 - threshold / MOTION_THRESHOLD_MAX) * 100) if threshold is not None else None
         ),
         "grideye_detection_threshold": threshold,
-        "detection_mask": mask,
-        "detection_cells_enabled": sum(1 for c in mask if c) if mask is not None else None,
+        **decode_mask(mask),
+        "install_orientation": int(num("InstallOrientation")) if num("InstallOrientation") is not None else None,
         "open_distance_in": round(-open_to / MOTOR_COUNTS_PER_INCH, 1) if open_to is not None else None,
         "max_open_distance_in": (
             round(door_offset / MOTOR_COUNTS_PER_INCH, 1) if door_offset is not None else None

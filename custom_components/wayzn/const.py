@@ -18,7 +18,7 @@ DEFAULT_POLL_INTERVAL = 30  # seconds
 DEFAULT_TIMEOUT = 20  # seconds
 
 # Platforms
-PLATFORMS = ["cover", "sensor", "binary_sensor"]
+PLATFORMS = ["cover", "sensor", "binary_sensor", "image", "switch"]
 
 # Error messages
 ERROR_AUTH_FAILED = "auth_failed"

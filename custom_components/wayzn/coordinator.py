@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .wayzn_client import wayzn_core as core
@@ -52,6 +52,11 @@ NOTIFY_STALE_ID = "wayzn_stale_state"
 NOTIFY_DRIFT_ID = "wayzn_state_drift"
 NOTIFY_COMMAND_ID = "wayzn_command_failed"
 NOTIFY_OSCILLATION_ID = "wayzn_state_oscillation"
+NOTIFY_SETTING_ID = "wayzn_setting_not_applied"
+
+# Settings writes: poll the device node until the change reads back.
+SETTING_VERIFY_TIMEOUT_S = 30
+SETTING_VERIFY_INTERVAL_S = 3
 
 # Oscillation detection: rapid open/close/open cycles are an ERROR, not a
 # state (2026-08-12: classifier/Wayzn interaction flapped the door every ~30s
@@ -125,6 +130,11 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         self._oscillation_active: bool = False
         # Door state tracking
         # (direction tracking removed — trust Firebase directly)
+
+        # Settings: newest Mask TimeStamp applied (SSE patches arrive out of
+        # order), and one settings write at a time.
+        self._mask_ts: Optional[float] = None
+        self._settings_lock = asyncio.Lock()
 
         super().__init__(
             hass,
@@ -332,6 +342,8 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
 
             # Track transitions for oscillation detection
             self._record_terminal_state(status.get("state"))
+
+            self._mask_ts = status.get("cloud_timestamp")
 
             # Poll results are authoritative — trust Firebase directly.
             # Returning `status` overwrites coordinator.data even when it
@@ -779,6 +791,12 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
                             self._schedule_reconnect_poll
                         )
 
+                    mask_update = self._extract_mask_from_event(event)
+                    if mask_update is not None:
+                        self.hass.loop.call_soon_threadsafe(
+                            self._async_apply_sse_mask, *mask_update
+                        )
+
                     new_data = self._extract_state_from_event(event)
                     if new_data is not None:
                         new_state = new_data.get("state", "unknown")
@@ -832,6 +850,40 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         Runs on the event loop so self.data is read and written in one place.
         """
         self.async_set_updated_data({**(self.data or {}), **new_data})
+
+    @staticmethod
+    def _extract_mask_from_event(event: core.SSEEvent) -> Optional[tuple]:
+        """Return (mask, cloud_ts) if an SSE event carries a new Mask, else None.
+
+        The door pushes Mask patches at "/" (several per second during motion;
+        bit 1 of each cell is live motion). Each carries its TimeStamp.
+        """
+        if event.path == "/" and isinstance(event.data, dict) and isinstance(event.data.get("Mask"), list):
+            try:
+                ts = float(event.data.get("TimeStamp"))
+            except (TypeError, ValueError):
+                ts = None
+            return event.data["Mask"], ts
+        if event.path == "/Mask" and isinstance(event.data, list):
+            return event.data, None
+        return None
+
+    def _async_apply_sse_mask(self, mask: list, cloud_ts: Optional[float]) -> None:
+        """Apply a live Mask from SSE to settings (event loop).
+
+        Deliberately not async_set_updated_data: that reschedules the next
+        poll, and a stream of motion patches would keep postponing the
+        authoritative poll that staleness and drift checks depend on.
+        """
+        if not self.data or "settings" not in self.data:
+            return  # no poll yet; the first poll brings the full settings
+        if cloud_ts is not None and self._mask_ts is not None and cloud_ts < self._mask_ts:
+            return  # older than what we already show
+        if cloud_ts is not None:
+            self._mask_ts = cloud_ts
+        settings = {**self.data["settings"], **core.decode_mask(mask)}
+        self.data = {**self.data, "settings": settings}
+        self.async_update_listeners()
 
     def _extract_state_from_event(self, event: core.SSEEvent) -> Optional[Dict[str, Any]]:
         """Extract ControlState from an SSE event and return status dict.
@@ -1018,6 +1070,70 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Unexpected error sending command: %s", e)
             self._handle_command_failure(command)
             raise UpdateFailed(f"Unexpected error: {e}") from e
+
+    async def async_set_mask_cell(self, cell: int, enabled: bool) -> None:
+        """Enable/disable one motion detection cell and verify it took.
+
+        Reads the cell fresh before sending, because the app's toggle command
+        carries the cell's current value XOR 1. On no read-back within
+        SETTING_VERIFY_TIMEOUT_S, raises and leaves a persistent notification.
+        """
+        async with self._settings_lock:
+            def read_cell(node: Dict[str, Any]) -> int:
+                return int(node["Mask"][cell])
+
+            current = read_cell(await self.hass.async_add_executor_job(self._fetch_node_sync))
+            if bool(current & 1) != enabled:
+                await self._async_send_setting(
+                    core.update_mask_command(current, cell),
+                    lambda node: bool(read_cell(node) & 1) == enabled,
+                    f"detection cell {cell} {'on' if enabled else 'off'}",
+                )
+            await self.async_request_refresh()
+
+    def _fetch_node_sync(self) -> Dict[str, Any]:
+        """Read tokens:/{device_id} (sync, for the executor)."""
+        email = self.config_entry.data[CONF_EMAIL]
+        password = self.config_entry.data[CONF_PASSWORD]
+        api_key = self.config_entry.data[CONF_API_KEY]
+        id_token = self._get_cached_or_fresh_token(email, password, api_key)
+        node = core.db_get("tokens", f"/{self.config_entry.data[CONF_DEVICE_ID]}", id_token)
+        if not isinstance(node, dict):
+            raise HomeAssistantError("Wayzn device node is empty")
+        return node
+
+    async def _async_send_setting(self, command: str, applied, description: str) -> None:
+        """Send a signed settings command, then poll until applied(node) is true."""
+        email = self.config_entry.data[CONF_EMAIL]
+        password = self.config_entry.data[CONF_PASSWORD]
+        api_key = self.config_entry.data[CONF_API_KEY]
+        device_id = self.config_entry.data[CONF_DEVICE_ID]
+        try:
+            id_token = await self.hass.async_add_executor_job(
+                self._get_cached_or_fresh_token, email, password, api_key
+            )
+            await self.hass.async_add_executor_job(
+                self._send_command_sync, device_id, id_token, command
+            )
+        except core.WayznError as e:
+            raise HomeAssistantError(f"Wayzn: failed to send {description}: {e}") from e
+
+        deadline = time.monotonic() + SETTING_VERIFY_TIMEOUT_S
+        while time.monotonic() < deadline:
+            await asyncio.sleep(SETTING_VERIFY_INTERVAL_S)
+            if applied(await self.hass.async_add_executor_job(self._fetch_node_sync)):
+                _LOGGER.info("Setting applied and verified: %s (%s)", description, command)
+                self._clear_anomaly(NOTIFY_SETTING_ID)
+                return
+
+        _LOGGER.warning("Setting NOT applied after %ss: %s (%s)", SETTING_VERIFY_TIMEOUT_S, description, command)
+        self._notify_anomaly(
+            NOTIFY_SETTING_ID,
+            "Wayzn setting not applied",
+            f"Sent {description} to the door, but it did not read back within "
+            f"{SETTING_VERIFY_TIMEOUT_S}s. Check the setting in the Wayzn app.",
+        )
+        raise HomeAssistantError(f"Wayzn: {description} was sent but not confirmed by the door")
 
     def _handle_command_failure(self, command: str) -> None:
         """Handle a command that raised during send (event loop context).

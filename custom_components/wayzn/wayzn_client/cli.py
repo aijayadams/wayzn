@@ -9,7 +9,7 @@ status querying, and device control operations.
 import json
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import click
 import requests
@@ -396,26 +396,38 @@ def settings_group() -> None:
     """Change device settings; each setter reads the state back to verify."""
 
 
-def _set_and_verify(ctx: AppContext, field: str, value: Any, device_id: Optional[str], timeout_s: int = 30) -> None:
-    """Send '<field>:<value>' and poll tokens:/{device_id} until field reads back as value."""
-    before = core.get_status(ctx.config, ctx.force_login, None, device_id, "tokens", None).get(field)
-    click.echo(f"{field} before: {before!r}")
-
-    reply = _send_device_command(ctx, f"{field}:{value}", device_id, None)
+def _send_and_verify(
+    ctx: AppContext,
+    command: str,
+    device_id: Optional[str],
+    read: Callable[[Dict[str, Any]], Any],
+    expected: Any,
+    label: str,
+    timeout_s: int = 30,
+) -> None:
+    """Send a signed command, then poll tokens:/{device_id} until read(node) == expected."""
+    reply = _send_device_command(ctx, command, device_id, None)
     if "bad key" in reply.lower() or "deleted" in reply.lower():
         click.echo("Agent rejected the key; not retrying.", err=True)
         raise SystemExit(1)
 
     deadline = time.monotonic() + timeout_s
     while True:
-        current = core.get_status(ctx.config, False, None, device_id, "tokens", None).get(field)
-        if current == value:
-            click.echo(f"{field} after:  {current!r} (verified)")
+        current = read(core.get_status(ctx.config, False, None, device_id, "tokens", None))
+        if current == expected:
+            click.echo(f"{label} after:  {current!r} (verified)")
             return
         if time.monotonic() > deadline:
-            click.echo(f"{field} still {current!r} after {timeout_s}s; expected {value!r}", err=True)
+            click.echo(f"{label} still {current!r} after {timeout_s}s; expected {expected!r}", err=True)
             raise SystemExit(1)
         time.sleep(3)
+
+
+def _set_and_verify(ctx: AppContext, field: str, value: Any, device_id: Optional[str]) -> None:
+    """Send '<field>:<value>' and verify the field reads back as value."""
+    before = core.get_status(ctx.config, ctx.force_login, None, device_id, "tokens", None).get(field)
+    click.echo(f"{field} before: {before!r}")
+    _send_and_verify(ctx, f"{field}:{value}", device_id, lambda node: node.get(field), value, field)
 
 
 @settings_group.command("dog-size")
@@ -496,3 +508,29 @@ def stream_cmd(ctx: AppContext, device_id: Optional[str], db: str, db_path: Opti
 
 if __name__ == "__main__":
     cli()
+
+
+@settings_group.command("detection-cell")
+@click.argument("row", type=click.IntRange(1, 5))
+@click.argument("col", type=click.IntRange(1, 4))
+@click.argument("state", type=click.Choice(["on", "off"]))
+@click.option("--device-id", required=False, help="Device ID (auto-select if registry has one device)")
+@click.pass_obj
+def settings_detection_cell(ctx: AppContext, row: int, col: int, state: str, device_id: Optional[str]) -> None:
+    """Enable/disable one motion detection cell (rows 1-5 top-down, cols 1-4, door on the left)."""
+    node = core.get_status(ctx.config, ctx.force_login, None, device_id, "tokens", None)
+    cell = core.mask_cell_index(row, col)
+    current = int(node["Mask"][cell])
+    wanted = state == "on"
+    click.echo(f"Cell r{row}c{col} (index {cell}) before: {current} ({'on' if current & 1 else 'off'})")
+    if bool(current & 1) == wanted:
+        click.echo("Already in that state; nothing sent.")
+        return
+    _send_and_verify(
+        ctx,
+        core.update_mask_command(current, cell),
+        device_id,
+        lambda n: bool(int(n["Mask"][cell]) & 1),
+        wanted,
+        f"Cell r{row}c{col} enabled",
+    )

@@ -45,7 +45,7 @@ the decompiled app but never sent by us; **inferred** = educated guess.
 | `AllowLocationAutomation` | false | Phone-location home/away switching |
 | `GrideyeCountThreshold` | 1 | Dog size: 1 small, 2 medium, 4 large (code; write verified) |
 | `GrideyeDetectionThreshold` | 1.085 | Motion sensitivity, 0–3.5, lower = more sensitive; app slider = 1 - t/3.5 (code) |
-| `Mask` | 20 ints | Thermal-sensor detection area, 1 = cell enabled (layout inferred 4×5) |
+| `Mask` | 20 ints | Thermal-sensor detection area; see [Detection area](#detection-area) |
 | `ObstructionDetection` | true | Obstruction detection on/off |
 | `ButtonOperation` | 1 | Physical button enabled |
 | `InstallOrientation`, `Orientation` | 1, 3 | Mounting orientation |
@@ -84,6 +84,30 @@ data; none of it exists in the state either.
   `{"schedule": [...]}` in an `x-wayznschedule` request header; the HMAC covers
   only `schedule_update,<nonce>`.
 
+## Detection area
+
+`Mask` is 20 cells of the thermal sensor, row-major, 4 columns × 5 rows, top
+row first, as drawn on the app's Motion Detection screen with the door on the
+left (`InstallOrientation` 1). Layout verified against the app on our door.
+
+Each cell holds two bits (from the app's `buildPixelColor`, code):
+
+| Value | Meaning | App colour |
+|---|---|---|
+| 0 | disabled | grey 200 `#EEEEEE` |
+| 1 | enabled for detection | green 400 `#66BB6A` |
+| 2 | disabled, motion detected now | grey 700 `#616161` |
+| 3 | enabled, motion detected now | orange 400 `#FFA726` |
+
+Bit 1 is transient. The door pushes it without any prompting: whenever the
+sensor sees motion it sends `Mask` patches at `/` (several per second, each
+with its own `TimeStamp`, sometimes out of order) over the normal SSE stream.
+(verified 2026-10-21; the app's `poke_dog` every 20s on its motion screen was
+not needed.)
+
+The app's tap handler sends `updateMask:<current XOR 1>:<4*row + col>`, value
+first, cell index second; the change reads back within ~5s. (verified)
+
 ## Commands
 
 | Command | Status | Notes |
@@ -91,7 +115,7 @@ data; none of it exists in the state either.
 | `open`, `close` | verified | |
 | `GrideyeCountThreshold:<1\|2\|4>` | verified (same-value write) | Dog size; CLI `settings dog-size` |
 | `GrideyeDetectionThreshold:<t>` | code | Sensitivity, 0–3.5 |
-| `updateMask:<bit>:<n>` | code | Detection-area cell; second argument meaning unknown |
+| `updateMask:<value>:<cell>` | verified | Set one detection-area cell; send its current value XOR 1. CLI `settings detection-cell`, HA cell switches. See [Detection area](#detection-area) |
 | `AutoOpen:`, `AutoOpenPetTag:`, `AwayAutoOpen:`, `AwayAutoOpenPetTag:` `<0\|1>` | code | Auto-open policy |
 | `ObstructionDetection:<0\|1>` | code | |
 | `set_open_to:<counts>` | code | Negative counts, -(inches × 767) |
@@ -102,7 +126,8 @@ data; none of it exists in the state either.
 | `schedule_update` + `x-wayznschedule` header | code | See [Schedule](#schedule) |
 | `device_home`, `device_away`, `user_home`, `user_away`, `allow_location_automation:<0\|1>`, `set_location:` | code | Home/away |
 | `token:<prev>` | code | Rotates the state-session token (`token:first` initially) |
-| `poke_dog`, `ping` | code | Keep-alive / speeds up state streaming |
+| `poke_dog` | code | Sent on opening the app's Motion Detection screen and every 20s while it is open; presumably makes the door publish live motion bits |
+| `ping` | code | Keep-alive |
 | `auto_zero` | code | Calibrate. Moves the door |
 | Pet tags: `tag_mapping_save:`, `tag_name_update:`, `tag_remove:`, `tag_set_sensitivity:`, `loitering_enable:` | code | |
 | `clear_device`, `bless`, `revoke:<n>`, `start_log`, `shake_clock` | code | Destructive or dev-only. **Do not send.** |

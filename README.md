@@ -70,14 +70,26 @@ default.
 | Schedule enabled | binary_sensor | `ScheduleEnabled` |
 | Dog size | sensor | small / medium / large |
 | Motion sensitivity | sensor | % as the app's slider shows it; attribute `detection_threshold` (raw) |
-| Motion detection area | sensor | Enabled cells of the 20-cell sensor mask; attributes `mask`, `grid` (4×5, inferred) |
+| Motion detection area | image | The 4×5 detection grid as the app draws it, door on the left: green = enabled, light grey = disabled, orange / dark grey = motion right now (live) |
+| Detection cell row R col C | switch ×20 (configuration) | Enable/disable each cell; see below |
 | Open distance | sensor | Inches; attributes `max_open_distance_in`, `open_to_counts` |
 | Hold open time | sensor | e.g. `15 s`, `2 min`, `Remain open`; attribute `seconds` |
 | Auto-open on motion / pet tag (home / away) | binary_sensor ×4 | The app's open-mode settings |
 | Away mode, Obstruction detection, Physical button | binary_sensor | The matching settings |
 | Firmware (Imp / motor controller / pet tag receiver), Pet tag receiver, Location automation | diagnostic | Versions and receiver connectivity |
 
-Changing settings from Home Assistant is not supported yet; use the CLI.
+Detection cells are the only setting HA can change so far. Each cell switch
+reads the door's current value, sends the app's `updateMask` command, and
+waits for the door to report the change (up to 30s). If it doesn't, the
+action fails and a persistent notification says so. Other settings: use the
+CLI.
+
+Live motion: the door streams the detection grid whenever its sensor sees
+motion, so the image updates in real time (no polling). These updates never
+delay the regular poll that the staleness checks rely on.
+
+A dashboard card that mirrors the app (live image on top, tap-to-toggle grid
+below) is in [docs/dashboard-motion-detection.yaml](docs/dashboard-motion-detection.yaml).
 
 ## Configuration
 
@@ -184,6 +196,7 @@ auto-open. Read-only. Format details: [docs/PROTOCOL.md](docs/PROTOCOL.md#schedu
 ### Change Settings ⚙️
 ```bash
 python wayzn.py settings dog-size small    # small | medium | large
+python wayzn.py settings detection-cell 2 4 on   # row 1-5 (top down), col 1-4 (from the door)
 ```
 
 Each setter sends a signed command to the door, then polls the device state

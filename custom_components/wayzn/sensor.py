@@ -23,7 +23,6 @@ async def async_setup_entry(
         [
             WayznDogSizeSensor(coordinator, entry),
             WayznSensitivitySensor(coordinator, entry),
-            WayznDetectionAreaSensor(coordinator, entry),
             WayznOpenDistanceSensor(coordinator, entry),
             WayznHoldOpenSensor(coordinator, entry),
             WayznScheduleTodaySensor(coordinator, entry),
@@ -63,30 +62,6 @@ class WayznSensitivitySensor(WayznSettingEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
         return {"detection_threshold": self.settings.get("grideye_detection_threshold")}
-
-
-class WayznDetectionAreaSensor(WayznSettingEntity, SensorEntity):
-    _attr_name = "Motion detection area"
-    _attr_icon = "mdi:grid"
-    _attr_native_unit_of_measurement = "cells"
-
-    def __init__(self, coordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "detection_cells_enabled")
-
-    @property
-    def native_value(self) -> Optional[int]:
-        return self.setting
-
-    @property
-    def extra_state_attributes(self) -> Dict[str, Any]:
-        mask = self.settings.get("detection_mask")
-        return {
-            "mask": mask,
-            # 4 columns × 5 rows is inferred from the app's grid, not confirmed.
-            "grid": ["".join("█" if c else "·" for c in mask[i:i + 4]) for i in range(0, len(mask), 4)]
-            if mask
-            else None,
-        }
 
 
 class WayznOpenDistanceSensor(WayznSettingEntity, SensorEntity):
