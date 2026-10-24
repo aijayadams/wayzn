@@ -34,7 +34,7 @@ the decompiled app but never sent by us; **inferred** = educated guess.
 |---|---|---|
 | `ControlState` | 14 | Door state; see `CONTROLSTATE_LABELS` in `wayzn_core.py` |
 | `LastControlState` | 14 | Previous `ControlState` |
-| `TimeStamp` | 1792514908 | Last device update (epoch s); used for staleness |
+| `TimeStamp` | 1792514908 | Device heartbeat (epoch s): rewritten about every 10s even when idle (measured 2026-10-24); used for staleness |
 | `Position`, `TargetDestination` | -74, -50 | Motor position in counts |
 | `OpenTo` | -6136 | Open distance in counts, negative; inches = -OpenTo / 767 (code) |
 | `DoorOffset` | 13572 | Full travel in counts; max open inches = DoorOffset / 767 (code) |

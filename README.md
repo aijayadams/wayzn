@@ -91,6 +91,33 @@ delay the regular poll that the staleness checks rely on.
 A dashboard card that mirrors the app (live image on top, tap-to-toggle grid
 below) is in [docs/dashboard-motion-detection.yaml](docs/dashboard-motion-detection.yaml).
 
+#### Staleness and self-healing
+
+The door rewrites its Firebase `TimeStamp` about every 10s, even when idle.
+If a poll succeeds but that `TimeStamp` is more than 5 minutes old, the door
+has stopped reporting to the cloud. The integration then marks every entity
+**unavailable** ("WAYZN STALE" in the log). While stale it:
+
+- keeps polling;
+- forces a Firebase re-sign-in and restarts the stream at once, then after 5,
+  10, 20, 40 and every 60 minutes ("WAYZN STALE RECOVERY attempt #n");
+- logs "WAYZN STILL STALE" every 10 minutes with the TimeStamp age, the
+  stream state and the attempt count.
+
+It recovers on the first poll with a fresh `TimeStamp`.
+While stale, Home Assistant cannot open or close the door, because HA skips
+service calls to an unavailable entity.
+
+A dead or silent stream doesn't make data stale on its own, because the
+10s poll keeps it fresh. The watchdog restarts the stream immediately three
+times, then backs off (60/120/240/300s).
+Firebase sign-ins are paced: after a success, at most one per 5 minutes until
+the token expires; after failures, 30/60/120/240/300s apart. Only rejected
+credentials trigger HA's re-authentication flow.
+
+Tests: `pip install -r requirements-dev.txt && python -m pytest tests`
+(Home Assistant is stubbed; no HA install needed).
+
 ## Configuration
 
 ### Python CLI Setup

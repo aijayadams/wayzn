@@ -109,8 +109,12 @@ class WayznCover(CoordinatorEntity, CoverEntity):
         honest "unavailable" — 2026-08-11: HA showed "open" for ~6h on a
         physically closed door.
 
-        Note: this never gates commands. async_open_cover/async_close_cover
-        always send to the device regardless of believed state.
+        Note: async_open_cover/async_close_cover never check the believed
+        state. But Home Assistant itself skips service calls to an
+        unavailable entity ("Referenced entities ... are not currently
+        available"), so while stale HA can neither open nor close the door
+        (2026-10-24: 3h with no HA control while the door had stopped
+        reporting to the cloud).
         """
         coordinator: WayznDataUpdateCoordinator = self.coordinator
         return coordinator.last_update_success and not coordinator.stale

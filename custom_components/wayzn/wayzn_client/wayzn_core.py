@@ -31,6 +31,26 @@ class WayznError(RuntimeError):
     pass
 
 
+class WayznAuthError(WayznError):
+    """Firebase rejected the credentials themselves (not a transient failure).
+
+    Only this error should send the user to re-enter credentials; network
+    errors, 5xx and rate limiting are transient and must be retried.
+    """
+    pass
+
+
+# Firebase Auth error messages that mean the credentials are wrong or the
+# account is unusable — retrying cannot help.
+_CREDENTIAL_ERRORS = (
+    "EMAIL_NOT_FOUND",
+    "INVALID_PASSWORD",
+    "INVALID_LOGIN_CREDENTIALS",
+    "INVALID_EMAIL",
+    "USER_DISABLED",
+)
+
+
 # ============================================================================
 # Type definitions
 # ============================================================================
@@ -198,7 +218,10 @@ def fb_sign_in_email_password(email: str, password: str, api_key: str, timeout: 
             err = r.json()
         except Exception:
             err = {"error": {"message": r.text.strip(), "code": r.status_code}}
-        raise WayznError(f"Firebase login failed: {err}")
+        message = str((err.get("error") or {}).get("message", "")) if isinstance(err, dict) else ""
+        if any(message.startswith(code) for code in _CREDENTIAL_ERRORS):
+            raise WayznAuthError(f"Firebase rejected the credentials: {message}")
+        raise WayznError(f"Firebase login failed (HTTP {r.status_code}): {message or err}")
     return r.json()
 
 

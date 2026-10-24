@@ -40,7 +40,34 @@ COMMAND_VERIFY_DELAYS = (5, 15, 30)
 # the cloud data may be stale — mark the entity unavailable instead of
 # confidently showing a possibly-wrong state (2026-08-11: wrong "open" for ~6h
 # was worse than an honest "unknown").
+#
+# TimeStamp is a device heartbeat, not an "on change" field: the door rewrites
+# it about every 10s even when idle (HA recorder 2026-10-14..24: age never
+# above 24s except one 112s blip). So an old TimeStamp while our own polls
+# succeed means the DOOR has stopped reporting to the cloud (2026-10-24:
+# frozen 12:27:44-15:41 PDT while every poll and the stream were fine).
 CLOUD_TIMESTAMP_STALE_THRESHOLD = 300  # seconds (5 min)
+
+# Self-healing while stale. Each attempt forces a Firebase re-sign-in and
+# restarts the SSE stream, which rules out (and repairs) a stuck token or
+# connection on our side. Delay before attempt n+1 is STALE_RECOVERY_DELAYS_S[n]
+# (last value repeats): at most one sign-in per hour once settled, so this can
+# never hammer Firebase auth (2026-08-11 rate-limit incident).
+STALE_RECOVERY_DELAYS_S = (300, 600, 1200, 2400, 3600)
+# While stale, log a status line this often so a long gap is never silent.
+STALE_STATUS_LOG_INTERVAL_S = 600
+
+# Firebase sign-in pacing. Successful sign-ins: at most one per
+# AUTH_MIN_INTERVAL_S unless the token has expired. Failed sign-ins back off
+# 30, 60, 120, 240, then AUTH_MIN_INTERVAL_S — failures used to be retried on
+# every 10s poll because only successes were rate-limited.
+AUTH_MIN_INTERVAL_S = 300
+AUTH_FAILURE_BACKOFF_S = (30, 60, 120, 240)
+
+# Stream thread restarts after it dies or goes silent: the first 3 are
+# immediate, then 60, 120, 240s, capped here. Polling keeps
+# running at FALLBACK_POLL_INTERVAL the whole time.
+STREAM_MAX_RESTART_BACKOFF_S = 300
 
 # Drift alerting: after this many consecutive polls disagreeing with the SSE
 # stream's last-known state, notify (once per episode).
@@ -69,6 +96,16 @@ OSCILLATION_MAX_TRANSITIONS = 3
 # Command tracking for logging (grace window removed — trust Firebase directly)
 
 
+def _fmt_duration(seconds: float) -> str:
+    """Human duration for logs: 45s, 12m05s, 3h08m."""
+    seconds = int(max(0, seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m{seconds % 60:02d}s"
+    return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
+
+
 class WayznDataUpdateCoordinator(DataUpdateCoordinator):
     """Coordinator for Wayzn device data updates.
 
@@ -82,8 +119,10 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         self.config_entry = config_entry
         self._auth_token: Optional[str] = None
         self._token_expires_at: Optional[float] = None
-        self._last_fresh_auth_time: float = 0.0  # time.time() of last fresh Firebase sign-in
-        self._auth_rate_limit_secs: float = 300.0  # min 5 minutes between fresh auth calls
+        self._last_fresh_auth_time: float = 0.0  # time.time() of last successful sign-in
+        self._last_auth_attempt_time: float = 0.0  # time.time() of last sign-in attempt
+        self._auth_failures: int = 0  # consecutive failed sign-ins
+        self._auth_lock = threading.Lock()  # poll executor and SSE thread both sign in
 
         # SSE streaming state
         self._stream_thread: Optional[threading.Thread] = None
@@ -93,7 +132,7 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         self._stream_response = None  # Active SSE response, closed on stop to unblock iter_lines
         self._stream_connected_at: float = 0.0  # monotonic time when SSE last connected
         self._consecutive_reconnects: int = 0  # watchdog reconnect counter for backoff
-        self._max_reconnect_backoff: float = 300.0  # max 5 min backoff between reconnects
+        self._last_sse_cloud_ts: Optional[float] = None  # newest device TimeStamp seen on SSE
 
         # Restart coordination
         self._restart_in_progress: bool = False
@@ -120,6 +159,13 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         self._last_poll_wall: Optional[float] = None
         self._cloud_timestamp: Optional[float] = None  # epoch seconds from Firebase TimeStamp
         self._cloud_timestamp_age_s: Optional[float] = None
+        self._stale_reason: Optional[str] = None
+        self._stale_since_wall: Optional[float] = None
+        self._stale_since: float = 0.0  # monotonic
+        self._stale_recovery_attempts: int = 0
+        self._next_stale_recovery_at: float = 0.0  # monotonic
+        self._last_stale_status_log: float = 0.0  # monotonic
+        self._stale_poll_controlstate: Optional[int] = None
 
         # Circuit breaker: handle for a watchdog-scheduled delayed SSE restart
         self._delayed_restart_handle = None
@@ -151,59 +197,84 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         self, email: str, password: str, api_key: str, force: bool = False,
         auth_timeout: int = 20,
     ) -> str:
-        """Get cached auth token if valid, otherwise authenticate fresh.
+        """Return the cached ID token if valid, otherwise sign in again.
 
-        Rate-limits fresh Firebase sign-in calls to prevent API key revocation
-        from excessive auth hammering (e.g., SSE reconnect loops).
+        Thread-safe (the poll executor and the SSE thread both call it).
+        Sign-ins are paced so nothing can hammer Firebase auth:
+          - after a success, no new sign-in for AUTH_MIN_INTERVAL_S unless the
+            cached token has actually expired (force=True does not bypass it);
+          - after a failure, back off AUTH_FAILURE_BACKOFF_S, then
+            AUTH_MIN_INTERVAL_S.
+        While paced, the cached token is returned if there is one (it may be
+        rejected; that surfaces as a normal poll/stream error), otherwise
+        WayznError. Every sign-in success and failure is logged.
 
-        Args:
-            auth_timeout: Firebase auth request timeout in seconds.
-                          Use shorter values for SSE reconnect context.
+        Raises core.WayznAuthError only when Firebase rejects the credentials.
         """
-        import time
-
-        now = time.time()
-
-        if not force and self._auth_token and self._token_expires_at:
-            if now < (self._token_expires_at - 60):
+        with self._auth_lock:
+            now = time.time()
+            token_valid = bool(
+                self._auth_token and self._token_expires_at
+                and now < (self._token_expires_at - 60)
+            )
+            if token_valid and not force:
                 return self._auth_token
 
-        # Rate-limit: refuse fresh auth if we just did one recently
-        elapsed_since_last_auth = now - self._last_fresh_auth_time
-        if self._last_fresh_auth_time > 0 and elapsed_since_last_auth < self._auth_rate_limit_secs:
-            if self._auth_token:
-                _LOGGER.warning(
-                    "Auth rate-limited: last fresh auth was %.0fs ago (min %ds), using cached token",
-                    elapsed_since_last_auth,
-                    self._auth_rate_limit_secs,
-                )
-                return self._auth_token
-            else:
-                _LOGGER.error(
-                    "Auth rate-limited and no cached token available; "
-                    "last fresh auth was %.0fs ago (min %ds)",
-                    elapsed_since_last_auth,
-                    self._auth_rate_limit_secs,
-                )
+            wait = self._auth_wait_remaining(now, token_valid)
+            if wait > 0:
+                if self._auth_token:
+                    _LOGGER.debug(
+                        "Firebase sign-in paced (%.0fs left); using cached token", wait,
+                    )
+                    return self._auth_token
                 raise core.WayznError(
-                    f"Firebase auth rate-limited: retry after {self._auth_rate_limit_secs - elapsed_since_last_auth:.0f}s"
+                    f"Firebase sign-in paced after {self._auth_failures} failure(s): "
+                    f"next attempt in {wait:.0f}s"
                 )
 
-        _LOGGER.debug("Authenticating with fresh credentials")
-        auth = core.fb_sign_in_email_password(email, password, api_key, timeout=auth_timeout)
-        self._last_fresh_auth_time = time.time()  # track AFTER the call
-        self._auth_token = auth.get("idToken")
+            self._last_auth_attempt_time = now
+            try:
+                auth = core.fb_sign_in_email_password(
+                    email, password, api_key, timeout=auth_timeout
+                )
+                token = auth.get("idToken")
+                if not token:
+                    raise core.WayznError("Firebase sign-in returned no ID token")
+            except Exception as e:
+                self._auth_failures += 1
+                _LOGGER.warning(
+                    "Firebase sign-in failed (%d in a row): %s — next attempt in %ds",
+                    self._auth_failures, e, int(self._auth_wait_remaining(time.time(), False)),
+                )
+                if isinstance(e, core.WayznError):
+                    raise
+                raise core.WayznError(f"Firebase sign-in failed: {e}") from e
 
-        if not self._auth_token:
-            raise core.WayznError("No ID token in response")
+            try:
+                expires_in = int(auth.get("expiresIn", 3600))
+            except (ValueError, TypeError):
+                expires_in = 3600
+            if self._auth_failures:
+                _LOGGER.warning(
+                    "Firebase sign-in recovered after %d failure(s)", self._auth_failures,
+                )
+            else:
+                _LOGGER.info("Firebase sign-in OK (token valid %ds)", expires_in)
+            self._auth_failures = 0
+            self._auth_token = token
+            self._last_fresh_auth_time = time.time()
+            self._token_expires_at = self._last_fresh_auth_time + expires_in
+            return token
 
-        try:
-            expires_in = int(auth.get("expiresIn", 3600))
-        except (ValueError, TypeError):
-            expires_in = 3600
-
-        self._token_expires_at = time.time() + expires_in
-        return self._auth_token
+    def _auth_wait_remaining(self, now: float, token_valid: bool) -> float:
+        """Seconds until another sign-in attempt is allowed (0 = now)."""
+        if self._auth_failures:
+            idx = min(self._auth_failures, len(AUTH_FAILURE_BACKOFF_S) + 1) - 1
+            delay = (AUTH_FAILURE_BACKOFF_S + (AUTH_MIN_INTERVAL_S,))[idx]
+            return max(0.0, self._last_auth_attempt_time + delay - now)
+        if self._last_fresh_auth_time and (token_valid or self._auth_token is None):
+            return max(0.0, self._last_fresh_auth_time + AUTH_MIN_INTERVAL_S - now)
+        return 0.0  # never signed in, or the cached token has expired
 
     def _get_fresh_token_sync(self) -> str:
         """Get a fresh auth token (for SSE auth refresh callback).
@@ -220,6 +291,7 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         # This prevents hammering Firebase on every SSE reconnect cycle.
         # Use shorter timeout (8s) for SSE context — if Firebase is slow,
         # better to fail fast and let the reconnect loop retry with backoff.
+        # A failure raises; db_stream logs it and retries on its backoff.
         return self._get_cached_or_fresh_token(
             email, password, api_key, force=False, auth_timeout=8
         )
@@ -235,9 +307,12 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch device status from Firebase (poll).
 
-        When SSE streaming is healthy, this runs infrequently as a heartbeat.
-        When streaming is down, this is the primary update mechanism.
+        Runs every FALLBACK_POLL_INTERVAL (or HEARTBEAT_POLL_INTERVAL while
+        the stream is healthy). Polls are the authoritative read and the
+        fallback whenever the stream is down. The stream watchdog runs first,
+        so it still runs when the fetch itself fails.
         """
+        self._check_stream_watchdog()
         try:
             email = self.config_entry.data[CONF_EMAIL]
             password = self.config_entry.data[CONF_PASSWORD]
@@ -248,8 +323,10 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
                 id_token = await self.hass.async_add_executor_job(
                     self._get_cached_or_fresh_token, email, password, api_key
                 )
-            except core.WayznError as e:
+            except core.WayznAuthError as e:
                 raise ConfigEntryAuthFailed(f"Authentication failed: {e}") from e
+            # Other sign-in errors are transient: UpdateFailed below, retried
+            # on the next poll within the sign-in backoff.
 
             status = await self.hass.async_add_executor_job(
                 self._get_status_summary, device_id, id_token
@@ -262,80 +339,10 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
                 self._stream_healthy,
             )
 
-            # Staleness watchdog: if stream claims healthy but no events
-            # received in STREAM_STALE_THRESHOLD seconds, restart it
-            now = time.monotonic()
-            stream_stale = (
-                self._stream_healthy
-                and self._last_stream_event > 0
-                and (now - self._last_stream_event) > STREAM_STALE_THRESHOLD
-            )
-            # Dead-on-connect: SSE connected but never received ANY event
-            dead_on_connect = (
-                not self._stream_healthy
-                and self._stream_connected_at > 0
-                and (now - self._stream_connected_at) > STREAM_STALE_THRESHOLD
-                and self._stream_thread is not None
-                and self._stream_thread.is_alive()
-            )
-            if stream_stale or dead_on_connect:
-                self._consecutive_reconnects += 1
-                reason = "stale" if stream_stale else "dead-on-connect"
-
-                # Exponential backoff: 60s, 120s, 240s, capped at 300s
-                backoff = min(
-                    STREAM_STALE_THRESHOLD * (2 ** (self._consecutive_reconnects - 1)),
-                    self._max_reconnect_backoff,
-                )
-                elapsed = int(now - (self._last_stream_event if stream_stale else self._stream_connected_at))
-
-                if self._consecutive_reconnects > 3:
-                    _LOGGER.warning(
-                        "SSE: stream %s (no events in %ds), reconnect #%d — "
-                        "backing off %ds before restart to avoid auth hammering",
-                        reason, elapsed, self._consecutive_reconnects, int(backoff),
-                    )
-                    # Circuit breaker: signal stop, back off to heartbeat
-                    # pacing, then attempt ONE restart when the backoff
-                    # elapses. (Previously the 4th+ watchdog trip left the
-                    # stream permanently dead — nothing ever restarted it.)
-                    self._signal_stream_stop()
-                    self.update_interval = timedelta(seconds=backoff)
-                    self._schedule_delayed_restart(backoff)
-                else:
-                    _LOGGER.warning(
-                        "SSE: stream %s (no events in %ds), reconnect #%d, restarting",
-                        reason, elapsed, self._consecutive_reconnects,
-                    )
-                    # Signal stop immediately, then schedule async restart
-                    # that joins the old thread off the event loop
-                    self._signal_stream_stop()
-                    self.hass.async_create_task(self._async_restart_streaming())
-            elif self._stream_healthy:
-                # Stream is healthy — reset consecutive reconnect counter
-                self._consecutive_reconnects = 0
-                # Cancel any pending circuit-breaker restart
-                self._cancel_delayed_restart()
-
             # --- Data honesty / drift checks -------------------------------
             self._last_poll_wall = time.time()
             self._update_cloud_freshness(status.get("cloud_timestamp"))
-
-            stream_dead = stream_stale or dead_on_connect
-            cloud_stale = (
-                self._cloud_timestamp_age_s is not None
-                and self._cloud_timestamp_age_s > CLOUD_TIMESTAMP_STALE_THRESHOLD
-            )
-            if cloud_stale:
-                self._enter_stale(
-                    f"Firebase TimeStamp is {int(self._cloud_timestamp_age_s)}s old "
-                    f"(limit {CLOUD_TIMESTAMP_STALE_THRESHOLD}s) — cloud data may "
-                    "not reflect the physical door"
-                )
-            elif stream_dead:
-                self._enter_stale("SSE stream is down and beyond the watchdog threshold")
-            elif self._stale:
-                self._exit_stale("polls are fresh and the stream is healthy")
+            self._evaluate_staleness(status)
 
             # Compare this authoritative poll against the SSE-tracked state
             self._check_drift(status)
@@ -358,6 +365,187 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as e:
             _LOGGER.error("Unexpected error fetching device status: %s", e)
             raise UpdateFailed(f"Unexpected error: {e}") from e
+
+    def _check_stream_watchdog(self) -> None:
+        """Restart the SSE stream if it is silent, never connected, or died.
+
+        Event loop only. Three failure shapes:
+          - stale: connected, but no event (not even a keep-alive) for
+            STREAM_STALE_THRESHOLD — TCP open but nothing flowing;
+          - dead-on-connect: thread alive, never received an event;
+          - died: the thread exited without being asked to (previously
+            nothing ever restarted it; polls carried on silently).
+        The first 3 restarts are immediate, later ones back off (60/120/240s,
+        cap STREAM_MAX_RESTART_BACKOFF_S). Polling stays at the fallback
+        interval throughout — the poll is the safety net, so it is never
+        slowed down while the stream is unhealthy.
+        """
+        now = time.monotonic()
+        thread = self._stream_thread
+        stream_stale = (
+            self._stream_healthy
+            and self._last_stream_event > 0
+            and (now - self._last_stream_event) > STREAM_STALE_THRESHOLD
+        )
+        dead_on_connect = (
+            not self._stream_healthy
+            and self._stream_connected_at > 0
+            and (now - self._stream_connected_at) > STREAM_STALE_THRESHOLD
+            and thread is not None
+            and thread.is_alive()
+        )
+        died = (
+            thread is not None
+            and not thread.is_alive()
+            and not self._stream_stop.is_set()
+            and not self._restart_in_progress
+        )
+        if not (stream_stale or dead_on_connect or died):
+            if self._stream_healthy:
+                self._consecutive_reconnects = 0
+                self._cancel_delayed_restart()
+            return
+
+        self._consecutive_reconnects += 1
+        if stream_stale:
+            reason = f"stale (no events in {int(now - self._last_stream_event)}s)"
+        elif dead_on_connect:
+            reason = f"dead-on-connect (no events in {int(now - self._stream_connected_at)}s)"
+        else:
+            reason = "thread exited unexpectedly"
+
+        self._signal_stream_stop()
+        if self._consecutive_reconnects > 3:
+            backoff = min(
+                STREAM_STALE_THRESHOLD * (2 ** (self._consecutive_reconnects - 4)),
+                STREAM_MAX_RESTART_BACKOFF_S,
+            )
+            _LOGGER.warning(
+                "SSE: stream %s, restart #%d in %ds (backing off; polling every %ds meanwhile)",
+                reason, self._consecutive_reconnects, int(backoff), FALLBACK_POLL_INTERVAL,
+            )
+            self._schedule_delayed_restart(backoff)
+        else:
+            _LOGGER.warning(
+                "SSE: stream %s, restart #%d now", reason, self._consecutive_reconnects,
+            )
+            self.hass.async_create_task(self._async_restart_streaming())
+
+    def _evaluate_staleness(self, status: Dict[str, Any]) -> None:
+        """Decide stale/fresh after a SUCCESSFUL poll, and self-heal while stale.
+
+        A successful poll proves our side works (sign-in, network, Firebase
+        read); its TimeStamp proves the door is still reporting. Stream health
+        alone no longer makes data stale: if the stream is down, the poll is
+        the fresh source and the watchdog restarts the stream. (A failed poll
+        already makes entities unavailable via last_update_success.)
+        """
+        age = self._cloud_timestamp_age_s
+        if age is None or age <= CLOUD_TIMESTAMP_STALE_THRESHOLD:
+            if self._stale:
+                self._exit_stale(
+                    f"door TimeStamp is fresh again (age {int(age)}s)" if age is not None
+                    else "poll succeeded and the snapshot has no TimeStamp to judge"
+                )
+            return
+
+        now = time.monotonic()
+        if not self._stale:
+            self._enter_stale(
+                f"the door has not reported to the Wayzn cloud for {int(age)}s "
+                f"(Firebase TimeStamp, limit {CLOUD_TIMESTAMP_STALE_THRESHOLD}s; "
+                "normally refreshed every ~10s). Our link is fine: this poll "
+                f"succeeded and the stream is {self._stream_status_text()}"
+            )
+        self._log_stale_controlstate(status)
+        self._check_stream_vs_poll_timestamp()
+
+        if now >= self._next_stale_recovery_at:
+            # Book the attempt here (synchronously) so two polls can't both
+            # schedule one before the task runs.
+            n = self._stale_recovery_attempts
+            self._stale_recovery_attempts = n + 1
+            self._next_stale_recovery_at = now + STALE_RECOVERY_DELAYS_S[
+                min(n, len(STALE_RECOVERY_DELAYS_S) - 1)
+            ]
+            self.hass.async_create_task(self._async_stale_recovery(n + 1))
+        if now - self._last_stale_status_log >= STALE_STATUS_LOG_INTERVAL_S:
+            self._last_stale_status_log = now
+            _LOGGER.warning(
+                "WAYZN STILL STALE for %s: door TimeStamp age %ds; last poll OK; "
+                "stream %s; %d recovery attempt(s), next in %ds; HA cannot "
+                "command the door while the entity is unavailable",
+                _fmt_duration(now - self._stale_since), int(age),
+                self._stream_status_text(), self._stale_recovery_attempts,
+                max(0, int(self._next_stale_recovery_at - now)),
+            )
+
+    async def _async_stale_recovery(self, attempt: int) -> None:
+        """One self-healing attempt: force re-sign-in, restart the stream.
+
+        Paced by STALE_RECOVERY_DELAYS_S and by the sign-in pacing, so the
+        worst case is one sign-in per hour. If the door itself has stopped
+        reporting this cannot fix it — but it rules out (and repairs) a stuck
+        token or connection on our side, and the log says which it was.
+        """
+        if not self._stale:
+            return
+        _LOGGER.warning(
+            "WAYZN STALE RECOVERY attempt #%d (stale for %s): forcing Firebase "
+            "re-sign-in and restarting the SSE stream",
+            attempt, _fmt_duration(time.monotonic() - self._stale_since),
+        )
+        try:
+            await self.hass.async_add_executor_job(
+                lambda: self._get_cached_or_fresh_token(
+                    self.config_entry.data[CONF_EMAIL],
+                    self.config_entry.data[CONF_PASSWORD],
+                    self.config_entry.data[CONF_API_KEY],
+                    force=True,
+                )
+            )
+        except Exception as e:  # logged; the next attempt follows the ladder
+            _LOGGER.warning("WAYZN STALE RECOVERY: re-sign-in failed: %s", e)
+        self._signal_stream_stop()
+        await self._async_restart_streaming()
+        await self.async_request_refresh()
+
+    def _stream_status_text(self) -> str:
+        if not self._stream_healthy or self._last_stream_event <= 0:
+            return "down (polling every %ds)" % FALLBACK_POLL_INTERVAL
+        return "alive (last event %ds ago)" % int(time.monotonic() - self._last_stream_event)
+
+    def _log_stale_controlstate(self, status: Dict[str, Any]) -> None:
+        """While stale, log ControlState changes the poll still sees.
+
+        Tells us afterwards whether the node froze entirely or only the
+        heartbeat stopped.
+        """
+        cs = status.get("controlstate")
+        if self._stale_poll_controlstate is not None and cs != self._stale_poll_controlstate:
+            _LOGGER.warning(
+                "WAYZN STALE: ControlState changed %s -> %s although the door "
+                "TimeStamp is frozen", self._stale_poll_controlstate, cs,
+            )
+        self._stale_poll_controlstate = cs
+
+    def _check_stream_vs_poll_timestamp(self) -> None:
+        """Cross-check: does the stream show a fresher device TimeStamp than the poll?
+
+        If so the poll path is serving old data (not the door), and we say so
+        loudly. The poll stays authoritative for state.
+        """
+        sse_ts = self._last_sse_cloud_ts
+        poll_ts = self._cloud_timestamp
+        if sse_ts is None or poll_ts is None:
+            return
+        if sse_ts - poll_ts > STREAM_STALE_THRESHOLD and time.time() - sse_ts <= CLOUD_TIMESTAMP_STALE_THRESHOLD:
+            _LOGGER.warning(
+                "WAYZN SOURCE DISAGREEMENT: the stream saw a door TimeStamp %ds "
+                "old but the poll returns one %ds old — the poll path is serving "
+                "old data, not the door. Trusting the poll (stale).",
+                int(time.time() - sse_ts), int(time.time() - poll_ts),
+            )
 
     def _get_status_summary(
         self, device_id: str, id_token: str
@@ -429,22 +617,38 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         """Mark data untrustworthy (log + notify once per episode)."""
         if self._stale:
             return
+        now = time.monotonic()
         self._stale = True
+        self._stale_reason = reason
+        self._stale_since = now
+        self._stale_since_wall = time.time()
+        self._stale_recovery_attempts = 0
+        self._next_stale_recovery_at = now  # first attempt right away
+        self._last_stale_status_log = now
+        self._stale_poll_controlstate = None
         _LOGGER.warning("WAYZN STALE: %s — entity marked unavailable", reason)
         self._notify_anomaly(
             NOTIFY_STALE_ID,
             "Wayzn door state is stale",
             f"{reason}. The door entity has been marked unavailable rather "
-            "than showing a possibly-wrong state. Check the Wayzn app for "
-            "the real door position.",
+            "than showing a possibly-wrong state, so Home Assistant cannot "
+            "open or close the door until it recovers. Check the Wayzn app "
+            "for the real door position.",
         )
 
     def _exit_stale(self, reason: str) -> None:
         """Recover from stale mode (log once)."""
         if not self._stale:
             return
+        duration = _fmt_duration(time.monotonic() - self._stale_since)
         self._stale = False
-        _LOGGER.warning("WAYZN STALE RECOVERED: %s — entity available again", reason)
+        self._stale_reason = None
+        self._stale_since_wall = None
+        _LOGGER.warning(
+            "WAYZN STALE RECOVERED after %s: %s (%d recovery attempt(s) made) — "
+            "entity available again",
+            duration, reason, self._stale_recovery_attempts,
+        )
         self._clear_anomaly(NOTIFY_STALE_ID)
 
     def _check_drift(self, status: Dict[str, Any]) -> None:
@@ -581,6 +785,10 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
 
         return {
             "stale": self._stale,
+            "stale_reason": self._stale_reason,
+            "stale_since": _iso(self._stale_since_wall),
+            "stale_recovery_attempts": self._stale_recovery_attempts,
+            "auth_failures": self._auth_failures,
             "sse_connected": self._stream_healthy,
             "last_sse_event_at": _iso(self._last_sse_event_wall),
             "last_poll_at": _iso(self._last_poll_wall),
@@ -791,6 +999,12 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
                             self._schedule_reconnect_poll
                         )
 
+                    sse_ts = self._extract_timestamp_from_event(event)
+                    if sse_ts is not None and (
+                        self._last_sse_cloud_ts is None or sse_ts > self._last_sse_cloud_ts
+                    ):
+                        self._last_sse_cloud_ts = sse_ts
+
                     mask_update = self._extract_mask_from_event(event)
                     if mask_update is not None:
                         self.hass.loop.call_soon_threadsafe(
@@ -850,6 +1064,20 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         Runs on the event loop so self.data is read and written in one place.
         """
         self.async_set_updated_data({**(self.data or {}), **new_data})
+
+    @staticmethod
+    def _extract_timestamp_from_event(event: core.SSEEvent) -> Optional[float]:
+        """Return the device TimeStamp (epoch s) carried by an SSE event, if any."""
+        raw = None
+        if event.path == "/" and isinstance(event.data, dict):
+            raw = event.data.get("TimeStamp")
+        elif event.path == "/TimeStamp":
+            raw = event.data
+        try:
+            ts = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return ts / 1000.0 if ts > 1e12 else ts
 
     @staticmethod
     def _extract_mask_from_event(event: core.SSEEvent) -> Optional[tuple]:
