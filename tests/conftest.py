@@ -60,6 +60,31 @@ def _install_ha_stubs() -> None:
         def async_update_listeners(self):
             pass
 
+    class CoordinatorEntity:
+        def __init__(self, coordinator):
+            self.coordinator = coordinator
+
+    class _Enum:
+        def __getattr__(self, name):
+            return name
+
+    components = types.ModuleType("homeassistant.components")
+    cover = types.ModuleType("homeassistant.components.cover")
+    cover.CoverDeviceClass = _Enum()
+    cover.CoverEntityFeature = types.SimpleNamespace(OPEN=1, CLOSE=2)
+    cover.CoverEntity = type("CoverEntity", (), {})
+    config_entries = types.ModuleType("homeassistant.config_entries")
+    config_entries.ConfigEntry = object
+    entity_platform = types.ModuleType("homeassistant.helpers.entity_platform")
+    entity_platform.AddEntitiesCallback = object
+    uc.CoordinatorEntity = CoordinatorEntity
+    sys.modules.update({
+        "homeassistant.components": components,
+        "homeassistant.components.cover": cover,
+        "homeassistant.config_entries": config_entries,
+        "homeassistant.helpers.entity_platform": entity_platform,
+    })
+
     core.HomeAssistant = object
     core.callback = lambda f: f
     exceptions.HomeAssistantError = HomeAssistantError

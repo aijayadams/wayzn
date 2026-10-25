@@ -352,6 +352,10 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
 
             self._mask_ts = status.get("cloud_timestamp")
 
+            if self._stale:
+                # Door silent: never show its last-reported position as fact.
+                status = {**status, "state": "unknown"}
+
             # Poll results are authoritative — trust Firebase directly.
             # Returning `status` overwrites coordinator.data even when it
             # differs from what SSE last delivered — that is intentional.
@@ -473,8 +477,8 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
             self._last_stale_status_log = now
             _LOGGER.warning(
                 "WAYZN STILL STALE for %s: door TimeStamp age %ds; last poll OK; "
-                "stream %s; %d recovery attempt(s), next in %ds; HA cannot "
-                "command the door while the entity is unavailable",
+                "stream %s; %d recovery attempt(s), next in %ds; state shown "
+                "as unknown, commands still sent",
                 _fmt_duration(now - self._stale_since), int(age),
                 self._stream_status_text(), self._stale_recovery_attempts,
                 max(0, int(self._next_stale_recovery_at - now)),
@@ -594,11 +598,14 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
 
     @property
     def stale(self) -> bool:
-        """True when we cannot vouch for the data we're showing.
+        """True when the door has stopped reporting but our link is fine.
 
-        Cover.availability keys off this: a wrong "open" is worse than an
-        honest "unavailable" (2026-08-11: HA showed "open" for ~6h on a
-        physically closed door).
+        The door state is then shown as "unknown" (a wrong "open" is worse
+        than an honest unknown — 2026-08-11), while the cover stays AVAILABLE
+        so HA can still send open/close: HA skips service calls to an
+        unavailable entity, and commands are the only rescue path
+        (2026-10-24: 3h with no HA control). "unavailable" is reserved for our
+        own link failing (sign-in or poll errors → last_update_success False).
         """
         return self._stale
 
@@ -626,14 +633,18 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         self._next_stale_recovery_at = now  # first attempt right away
         self._last_stale_status_log = now
         self._stale_poll_controlstate = None
-        _LOGGER.warning("WAYZN STALE: %s — entity marked unavailable", reason)
+        _LOGGER.warning(
+            "WAYZN STALE: %s — door state set to unknown; the cover stays "
+            "available so open/close commands are still sent", reason,
+        )
         self._notify_anomaly(
             NOTIFY_STALE_ID,
-            "Wayzn door state is stale",
-            f"{reason}. The door entity has been marked unavailable rather "
-            "than showing a possibly-wrong state, so Home Assistant cannot "
-            "open or close the door until it recovers. Check the Wayzn app "
-            "for the real door position.",
+            "Wayzn door state is unknown",
+            f"{reason}. The door's state is shown as unknown rather than a "
+            "possibly-wrong position. Home Assistant can still send open/close "
+            "commands, but cannot confirm them. Opening the Wayzn app has "
+            "brought the door back before (2026-10-24, after a power cycle); "
+            "check the app for the real door position.",
         )
 
     def _exit_stale(self, reason: str) -> None:
@@ -646,7 +657,7 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         self._stale_since_wall = None
         _LOGGER.warning(
             "WAYZN STALE RECOVERED after %s: %s (%d recovery attempt(s) made) — "
-            "entity available again",
+            "door state known again",
             duration, reason, self._stale_recovery_attempts,
         )
         self._clear_anomaly(NOTIFY_STALE_ID)
@@ -1062,7 +1073,11 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
 
         SSE events carry only controlstate/state; settings come from polls.
         Runs on the event loop so self.data is read and written in one place.
+        While stale the state stays "unknown" until a poll proves the door
+        is reporting again.
         """
+        if self._stale:
+            new_data = {**new_data, "state": "unknown"}
         self.async_set_updated_data({**(self.data or {}), **new_data})
 
     @staticmethod
@@ -1271,8 +1286,9 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
 
             # Optimistic state update for responsive UI — will be corrected
             # by the next poll or SSE event with real Firebase data
+            # (skipped while stale: the state stays an honest "unknown")
             optimistic_state = "opening" if command == "open" else "closing"
-            if self.data:
+            if self.data and not self._stale:
                 optimistic_data = self.data.copy()
                 optimistic_data["state"] = optimistic_state
                 self.async_set_updated_data(optimistic_data)

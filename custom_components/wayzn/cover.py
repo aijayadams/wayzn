@@ -74,7 +74,7 @@ class WayznCover(CoordinatorEntity, CoverEntity):
         "unknown" (unmapped ControlState) returns None — HA renders the
         entity as unknown rather than confidently lying about direction.
         """
-        if self.coordinator.data is None:
+        if self.coordinator.data is None or self.coordinator.stale:
             return None
 
         state = self.coordinator.data.get("state")
@@ -86,7 +86,7 @@ class WayznCover(CoordinatorEntity, CoverEntity):
     @property
     def is_opening(self) -> bool:
         """Return if cover is opening."""
-        if self.coordinator.data is None:
+        if self.coordinator.data is None or self.coordinator.stale:
             return False
 
         return self.coordinator.data.get("state") == "opening"
@@ -94,30 +94,24 @@ class WayznCover(CoordinatorEntity, CoverEntity):
     @property
     def is_closing(self) -> bool:
         """Return if cover is closing."""
-        if self.coordinator.data is None:
+        if self.coordinator.data is None or self.coordinator.stale:
             return False
 
         return self.coordinator.data.get("state") == "closing"
 
     @property
     def available(self) -> bool:
-        """Return if entity is available.
+        """Available unless our own link to the Wayzn cloud is broken.
 
-        Unavailable when the coordinator's last update failed OR when the
-        coordinator has flagged its data as stale (cloud TimeStamp too old /
-        SSE stream dead beyond the watchdog). A wrong "open" is worse than an
-        honest "unavailable" — 2026-08-11: HA showed "open" for ~6h on a
-        physically closed door.
-
-        Note: async_open_cover/async_close_cover never check the believed
-        state. But Home Assistant itself skips service calls to an
-        unavailable entity ("Referenced entities ... are not currently
-        available"), so while stale HA can neither open nor close the door
-        (2026-10-24: 3h with no HA control while the door had stopped
-        reporting to the cloud).
+        Unavailable only when the last poll failed (sign-in or Firebase read
+        errors). When the link is fine but the door has stopped reporting
+        (coordinator.stale), the cover stays available with state unknown
+        (is_closed None): HA skips service calls to unavailable entities, and
+        open/close must keep working — commands are the only rescue path
+        when belief is wrong (2026-10-24: 3h with no HA control after a door
+        power cycle). A wrong "open" is still never shown.
         """
-        coordinator: WayznDataUpdateCoordinator = self.coordinator
-        return coordinator.last_update_success and not coordinator.stale
+        return self.coordinator.last_update_success
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:

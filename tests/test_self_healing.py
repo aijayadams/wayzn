@@ -379,3 +379,60 @@ def test_db_stream_survives_failed_auth_refresh(monkeypatch):
         stop.set()
     assert events == ["put"]
     assert gets == ["old-token", "old-token", "old-token", "fresh-token"]
+
+
+# --------------------------------------------------------------------------
+# Two failure modes: door silent -> available + unknown; link down -> unavailable
+# --------------------------------------------------------------------------
+
+def _cover(c):
+    from custom_components.wayzn.cover import WayznCover
+
+    return WayznCover(c, types.SimpleNamespace(data=dict(ENTRY_DATA)))
+
+
+def test_door_silent_keeps_cover_available_with_unknown_state(coordinator, hass, clock, node, run, caplog):
+    """Door rebooted: link OK, TimeStamp frozen (2026-10-24 power cycle)."""
+    frozen = clock.time()
+    node["TimeStamp"] = frozen
+    node["ControlState"] = 14  # last report before the reboot: closed
+    while clock.time() - frozen <= CLOUD_TIMESTAMP_STALE_THRESHOLD:
+        clock.advance(10)
+        _healthy_stream(coordinator, clock)
+        run(coordinator.async_refresh())
+    cover = _cover(coordinator)
+    assert coordinator.stale
+    assert cover.available  # HA can still send open/close
+    assert cover.is_closed is None  # honest unknown, not the stale "closed"
+    assert not cover.is_opening and not cover.is_closing
+    assert coordinator.data["state"] == "unknown"
+    assert "door state set to unknown; the cover stays available" in caplog.text
+
+    # A stream update while silent does not resurrect a confident state.
+    coordinator._async_apply_sse_state({"controlstate": 14, "state": "closed"})
+    assert cover.is_closed is None
+
+    # Commands while silent: no optimistic "opening" either.
+    monkey_sent = []
+    coordinator._send_command_sync = lambda dev, tok, cmd: monkey_sent.append(cmd)
+    run(coordinator.async_send_command("open"))
+    assert monkey_sent == ["open"]
+    assert coordinator.data["state"] == "unknown"
+
+    # The door reports again: real state returns.
+    clock.advance(10)
+    node["TimeStamp"] = clock.time()
+    run(coordinator.async_refresh())
+    assert not coordinator.stale
+    assert cover.available and cover.is_closed is True
+
+
+def test_link_failure_makes_cover_unavailable(coordinator, clock, node, auth, run):
+    run(coordinator.async_refresh())
+    cover = _cover(coordinator)
+    assert cover.available
+    clock.advance(3600)  # token expired, and sign-in now fails
+    auth.fail_with = requests.exceptions.ConnectionError("no route to Firebase")
+    run(coordinator.async_refresh())
+    assert not cover.available
+    assert not coordinator.stale  # this is our link, not the door

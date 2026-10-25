@@ -125,7 +125,7 @@ first, cell index second; the change reads back within ~5s. (verified)
 | `timezone:<name>`, `offset:<s>` | code | Sent by the app before saving a schedule |
 | `schedule_update` + `x-wayznschedule` header | code | See [Schedule](#schedule) |
 | `device_home`, `device_away`, `user_home`, `user_away`, `allow_location_automation:<0\|1>`, `set_location:` | code | Home/away |
-| `token:<prev>` | code | Rotates the state-session token (`token:first` initially) |
+| `token:<prev>` | code | Rotates the state-session token (`token:first` initially). The app's token renewer (`WayznDevice.start` → `_startTokenRenewer`, `Timer.periodic`) sends it on open and whenever `shouldRenewToken` is true, which includes its data being more than 180s old. Likely what woke the door after the 2026-10-24 power cycle; not yet tested |
 | `poke_dog` | code | Sent on opening the app's Motion Detection screen and every 20s while it is open; presumably makes the door publish live motion bits |
 | `ping` | code | Keep-alive |
 | `auto_zero` | code | Calibrate. Moves the door |

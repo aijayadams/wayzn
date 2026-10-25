@@ -95,8 +95,11 @@ below) is in [docs/dashboard-motion-detection.yaml](docs/dashboard-motion-detect
 
 The door rewrites its Firebase `TimeStamp` about every 10s, even when idle.
 If a poll succeeds but that `TimeStamp` is more than 5 minutes old, the door
-has stopped reporting to the cloud. The integration then marks every entity
-**unavailable** ("WAYZN STALE" in the log). While stale it:
+has stopped reporting to the cloud ("WAYZN STALE" in the log). The cover then
+**stays available with state unknown**, so Home Assistant can still send
+open/close (HA skips service calls to unavailable entities). The cover goes
+**unavailable** only when our own link fails (sign-in or poll errors). Settings
+entities go unavailable in both cases. While stale the integration:
 
 - keeps polling;
 - forces a Firebase re-sign-in and restarts the stream at once, then after 5,
@@ -105,8 +108,14 @@ has stopped reporting to the cloud. The integration then marks every entity
   stream state and the attempt count.
 
 It recovers on the first poll with a fresh `TimeStamp`.
-While stale, Home Assistant cannot open or close the door, because HA skips
-service calls to an unavailable entity.
+
+Known trigger (2026-10-24): after a **power cycle** the door reconnected to the
+Imp cloud but did not resume Firebase reporting for 3 hours, until someone
+**opened the Wayzn app**, which is the manual workaround. On open, the app's
+token renewer sends the signed agent command `token:<previous session token>`
+when its data is more than 180s old. That is the likely wake-up, but this
+client has never sent it, so it is not part of automatic recovery (see
+docs/PROTOCOL.md).
 
 A dead or silent stream doesn't make data stale on its own, because the
 10s poll keeps it fresh. The watchdog restarts the stream immediately three
