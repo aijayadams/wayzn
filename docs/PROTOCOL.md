@@ -34,7 +34,7 @@ the decompiled app but never sent by us; **inferred** = educated guess.
 |---|---|---|
 | `ControlState` | 14 | Door state; see `CONTROLSTATE_LABELS` in `wayzn_core.py` |
 | `LastControlState` | 14 | Previous `ControlState` |
-| `TimeStamp` | 1792514908 | Device heartbeat (epoch s): rewritten about every 10s even when idle (measured 2026-10-24); used for staleness |
+| `TimeStamp` | 1792514908 | Refreshed about every 10s even when idle, apparently by the Imp **cloud agent**, not the door: it stayed fresh while the door was unplugged (2026-10-25). Used for staleness; see [Liveness](#liveness-and-the-2026-10-24-freeze) |
 | `Position`, `TargetDestination` | -74, -50 | Motor position in counts |
 | `OpenTo` | -6136 | Open distance in counts, negative; inches = -OpenTo / 767 (code) |
 | `DoorOffset` | 13572 | Full travel in counts; max open inches = DoorOffset / 767 (code) |
@@ -135,3 +135,66 @@ first, cell index second; the change reads back within ~5s. (verified)
 Adding a setter: confirm the exact string in the decompile first, add it to the
 `settings` group in `cli.py` via `_set_and_verify`, test against the door, then
 move its row here to **verified**.
+
+## Liveness and the 2026-10-24 freeze
+
+**What happened (2026-10-24, PDT).**
+- `TimeStamp` froze at 12:27:44, 35s after a close, during a run of
+  oscillation alerts.
+- From 12:32:54 to 15:41:04 the integration marked the door stale. Its own link
+  was healthy throughout: polls every 10s, a live stream, and hourly token
+  refreshes.
+- Wayzn's app showed the door connected, and the Imp had an established TCP
+  session to its cloud.
+- Reporting resumed at 15:41 when the user **opened the Wayzn app**.
+- The user had power-cycled the door around 12:27.
+- In the 10 days of HA recorder history before this, `TimeStamp` age never
+  exceeded 24s, apart from one 112s blip on 2026-10-20.
+
+**Repro attempts (2026-10-25, app not opened). Neither froze.**
+1. Power cycle; the new Imp TCP session to 52.10.174.82:31314 came up at about
+   07:14:45. `TimeStamp` never went above 11s old.
+2. Unplugged for about 3 minutes (roughly 07:35 to 07:39). The door has **no
+   battery**.
+   - `TimeStamp` stayed fresh (≤12s old) the whole time.
+   - `ControlState` read 15 (open) from 07:35:44 to 07:39:33.
+   - A new Imp TCP session came up at 07:39:29; reporting continued, and
+     `ControlState` read 14 (closed) from 07:39:50.
+
+**What this means.**
+- An unpowered door can't write, so `TimeStamp` (and evidently `ControlState`)
+  are refreshed by the Imp **cloud agent**, not the door.
+- The 10-24 freeze was most likely an agent stall on Wayzn's side, not a door
+  reboot.
+- The app's launch-time `token:` command (below) plausibly un-stalls the agent.
+  This is unproven.
+
+**Manual workaround:** open the Wayzn app.
+
+**Open question: telling when the door itself is offline.**
+- A fresh `TimeStamp` proves the agent is alive, not the door. A powered-off
+  door can look fresh while its `ControlState` is stale, which is an honesty
+  risk: a stale "open" or "closed" shown as current.
+- Possible device-sourced signals:
+  - the door's Imp TCP session (pfSense states for its LAN address);
+  - fields that only the device can change.
+- Not implemented.
+
+**The app-open command (decompile, not yet captured).**
+- `WayznDevice.start` → `_startTokenRenewer` (a `Timer.periodic`) →
+  `_tokenTimer` → `shouldRenewToken` → `renewDeviceToken`.
+- `renewDeviceToken` sends `token:<previous session token>` through
+  `sendCommand` (signed with the same HMAC as `open`/`close`).
+- `shouldRenewToken` is true when, among other conditions, the app's token
+  data is more than 180s old.
+- The app also `print`s `Sending Command: <cmd>`, so `adb logcat` shows the
+  exact string.
+- The capture is ready to run whenever the exact format is wanted for an
+  automatic nudge:
+  - the scratch repo's `Pixel6` emulator has the official app (4.60.0), logged in;
+  - launch it once with logcat running, then do one background/foreground
+    cycle after 3+ minutes;
+  - redact session tokens and nonces.
+- Until a capture confirms the exact argument, this client does not send
+  `token:`. A bad signature can delete a key slot.
+

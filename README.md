@@ -109,13 +109,12 @@ entities go unavailable in both cases. While stale the integration:
 
 It recovers on the first poll with a fresh `TimeStamp`.
 
-Known trigger (2026-10-24): after a **power cycle** the door reconnected to the
-Imp cloud but did not resume Firebase reporting for 3 hours, until someone
-**opened the Wayzn app**, which is the manual workaround. On open, the app's
-token renewer sends the signed agent command `token:<previous session token>`
-when its data is more than 180s old. That is the likely wake-up, but this
-client has never sent it, so it is not part of automatic recovery (see
-docs/PROTOCOL.md).
+Despite the log wording ("the door has not reported"), `TimeStamp` measures
+the Wayzn **cloud agent**, not the door: during a 3-minute unplug on 2026-10-25
+it stayed fresh. See [docs/PROTOCOL.md](docs/PROTOCOL.md#liveness-and-the-2026-10-24-freeze)
+for the 2026-10-24 freeze, both repro attempts, and the open question of how to
+tell when the door itself is offline. Manual workaround for a freeze: **open
+the Wayzn app** (that ended the 2026-10-24 freeze).
 
 A dead or silent stream doesn't make data stale on its own, because the
 10s poll keeps it fresh. The watchdog restarts the stream immediately three
