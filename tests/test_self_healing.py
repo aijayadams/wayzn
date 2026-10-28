@@ -100,7 +100,7 @@ def test_frozen_timestamp_goes_stale_then_recovers(coordinator, hass, clock, nod
         run(coordinator.async_refresh())
     assert coordinator.stale
     assert coordinator.last_update_success  # our link is fine
-    assert "has not reported to the Wayzn cloud" in caplog.text
+    assert "the Wayzn cloud stopped updating" in caplog.text
     assert "this poll succeeded and the stream is alive" in caplog.text
 
     # Entering stale schedules a recovery attempt at once: forced sign-in

@@ -456,7 +456,7 @@ class WayznDataUpdateCoordinator(DataUpdateCoordinator):
         now = time.monotonic()
         if not self._stale:
             self._enter_stale(
-                f"the door has not reported to the Wayzn cloud for {int(age)}s "
+                f"the Wayzn cloud stopped updating {int(age)}s ago "
                 f"(Firebase TimeStamp, limit {CLOUD_TIMESTAMP_STALE_THRESHOLD}s; "
                 "normally refreshed every ~10s). Our link is fine: this poll "
                 f"succeeded and the stream is {self._stream_status_text()}"
