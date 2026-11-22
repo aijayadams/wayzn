@@ -2,6 +2,19 @@
 
 A Python CLI and Home Assistant integration for controlling Wayzn smart petdoors via Firebase and Electric Imp.
 
+> **Wayzn is shutting down its service in March 2027.** When it does, the
+> cloud mode of this integration (and the Wayzn app) will stop working. The
+> Home Assistant integration also has a **local mode** for doors running a
+> replacement controller; see [Local mode](#local-mode-wayzn-brain).
+
+### Keeping the hardware alive: wayzn-afterlife
+
+[aijayadams/wayzn-afterlife](https://github.com/aijayadams/wayzn-afterlife)
+is the place to discuss keeping Wayzn doors working after the shutdown: the
+hardware reverse engineering, the replacement ESP32 brain (the wayzn-brain
+firmware), and its HTTP API ([docs/API.md](https://github.com/aijayadams/wayzn-afterlife/blob/main/docs/API.md)).
+If you own a Wayzn door, please open an issue there.
+
 ## Overview
 
 ### Python CLI
@@ -20,6 +33,7 @@ A Python CLI and Home Assistant integration for controlling Wayzn smart petdoors
 - 🎛️ Open/close controls from Home Assistant UI
 - 🗓️ Schedule and door settings as read-only sensors (see below)
 - 🔌 Support for multiple devices
+- 📡 Local mode: control a door running the wayzn-brain firmware over the LAN, no cloud
 
 ## Installation
 
@@ -44,17 +58,47 @@ pip install -r requirements.txt
 2. Restart Home Assistant
 3. Go to Settings → Integrations → Add Integration
 4. Search for "Wayzn"
-5. Follow the config flow to add your device
+5. Choose **Local (wayzn-brain on the door)** or **Wayzn cloud**, then follow the config flow
 
-#### Configuration
+#### Local mode (wayzn-brain)
+
+Local mode talks to a door whose Electric Imp module has been replaced by an
+ESP32 controller running the wayzn-brain firmware from
+[wayzn-afterlife](https://github.com/aijayadams/wayzn-afterlife). The
+integration uses the controller's HTTP API on your LAN instead of the Wayzn
+cloud, so it keeps working after the shutdown.
+
+Setup: Settings → Integrations → Add Integration → **Wayzn** →
+**Local (wayzn-brain on the door)**, then enter:
+- **Host or IP**: the controller's address on your network
+- **API token**: the controller's bearer token
+- **Device name** (and a unique device id)
+
+The flow checks the controller answers `/api/status` with that token before
+creating the entry.
+
+| Entity | Type | Shows |
+|---|---|---|
+| Dog Door | cover | Door state (open / closed / opening / closing / unknown); open/close |
+| Auto open | switch | The door's own thermal-sensor auto-open (it opens when it sees a dog and closes after). The setting lives on the door; turn it on/off from HA automations to schedule it. Off stops automatic opening and closing; HA open/close still work |
+
+The integration polls the controller every 5s (every 1s while the door moves
+or just after a command). If the controller is unreachable or its status is
+old, the state is **unknown**, never a guess, and the cover stays available so
+open/close can still be sent. Opens are retried on network errors; a command
+the door doesn't carry out, an unreachable controller, or a door that keeps
+flapping open/closed raises a persistent notification. The cloud-only
+entities below (schedule, settings, detection grid) don't exist in local mode.
+
+#### Cloud mode configuration
 The integration uses a config flow UI - no manual config file needed!
-You'll need:
+For **Wayzn cloud** you'll need:
 - **Email**: Your Wayzn account email
 - **Password**: Your Wayzn account password
 - **Firebase API Key**: Get from Wayzn's Firebase console
 - **QR Code**: Scan the QR code from your device (format: `QR-Code:base64key:knum:device_id:label`)
 
-#### Entities
+#### Entities (cloud mode)
 
 All entities belong to the door's device. Settings sensors refresh on every
 coordinator poll (at most every 120s); door state also updates in real time
@@ -296,11 +340,6 @@ python wayzn.py --config /path/to/custom_config.json devices
 5. **Sign Command** → Compute HMAC-SHA256 signature of command with nonce
 6. **Send Request** → POST to agent URL with signed headers
 7. **Get Response** → Device executes command and returns status
-
-### Deployment
-
-Home Assistant on hass.in.waveb.io is deployed from this repo by the `hass`
-role in waveb-priv (`./waveb ansible run --limit hass.in.waveb.io --tags hass-wayzn`).
 
 ### Authentication 🔐
 
