@@ -18,9 +18,6 @@ LOCAL_NUMBERS = [
     # unique id of the earlier percent entity, so the entity id stays the same.
     ("open_inches", "Open position", 2.7, 16.8, 0.1, "in", NumberMode.SLIDER, "mdi:arrow-expand-horizontal",
      "open_percent"),
-    # The motor driver's current cap in the STM32's own units (the door's default, 1030, is the
-    # most it allows; it can only be lowered). Compare with the Motor current sensors.
-    ("current_cap", "Current cap", 400, 1030, 10, None, NumberMode.BOX, "mdi:arm-flex", None),
     ("presence_threshold", "Presence threshold", 0.3, 10, 0.1, None, NumberMode.BOX, "mdi:motion-sensor", None),
     ("occupied_threshold", "Occupied threshold", 0.2, 5, 0.05, None, NumberMode.BOX, "mdi:shield-alert-outline", None),
 ]
@@ -54,4 +51,4 @@ class LocalSettingNumber(LocalSettingEntity, NumberEntity):
         return self.setting
 
     async def async_set_native_value(self, value: float) -> None:
-        await self._set(int(value) if self._key in ("hold_s", "current_cap") else round(float(value), 2))
+        await self._set(int(value) if self._key == "hold_s" else round(float(value), 2))

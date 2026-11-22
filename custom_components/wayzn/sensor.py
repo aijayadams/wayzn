@@ -167,8 +167,8 @@ class WayznFirmwareSensor(WayznSettingEntity, SensorEntity):
 
 
 class LocalBrainSensor(CoordinatorEntity, SensorEntity):
-    """A live reading from the door (local mode): motor current in the STM32's own units
-    (the same units as the Current cap setting). Unknown when the door isn't fresh."""
+    """A live reading from the door (local mode): motor current in the STM32's own units.
+    Unknown when the door isn't fresh."""
 
     _attr_has_entity_name = True
     _attr_state_class = SensorStateClass.MEASUREMENT
