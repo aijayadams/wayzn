@@ -20,9 +20,12 @@ LOCAL_NUMBERS = [
      "open_percent"),
     ("presence_threshold", "Presence threshold", 0.3, 10, 0.1, None, NumberMode.BOX, "mdi:motion-sensor", None),
     ("occupied_threshold", "Occupied threshold", 0.2, 5, 0.05, None, NumberMode.BOX, "mdi:shield-alert-outline", None),
-    # The door's full travel in encoder counts, as a check: a calibration that measures more than 2 %
-    # off is rejected and retried. 0 = no check. Set it from a good calibration ("Travel" sensor).
-    ("expected_travel", "Expected travel", 0, 40000, 1, None, NumberMode.BOX, "mdi:ruler", None),
+    # The door's full travel in inches, as a check and a reference: a calibration that measures more
+    # than 2 % off is rejected and retried, and it lets the door zero itself as closed when its motor
+    # controller restarts at the closed end mid-calibration. 0 = none. Set it from a good calibration
+    # ("Travel" sensor). Keeps the unique id of the earlier counts entity.
+    ("expected_travel_inches", "Expected travel", 0, 52.1, 0.01, "in", NumberMode.BOX, "mdi:ruler",
+     "expected_travel"),
 ]
 
 
@@ -54,4 +57,4 @@ class LocalSettingNumber(LocalSettingEntity, NumberEntity):
         return self.setting
 
     async def async_set_native_value(self, value: float) -> None:
-        await self._set(int(value) if self._key in ("hold_s", "expected_travel") else round(float(value), 2))
+        await self._set(int(value) if self._key == "hold_s" else round(float(value), 2))

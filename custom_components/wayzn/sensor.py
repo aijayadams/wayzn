@@ -6,6 +6,7 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfLength
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_change
 
@@ -23,10 +24,18 @@ async def async_setup_entry(
     """Set up Wayzn settings sensors."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
     if entry.data.get(CONF_MODE) == MODE_LOCAL:
+        # Replaced: motor current in the controller's raw units, and travel in encoder counts.
+        registry = er.async_get(hass)
+        for old in ("motor_current", "last_move_peak_current", "travel_counts"):
+            old_id = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.data[CONF_DEVICE_ID]}_{old}")
+            if old_id:
+                registry.async_remove(old_id)
         async_add_entities([
-            LocalBrainSensor(coordinator, entry, "motor_current", "Motor current", "mdi:current-ac"),
-            LocalBrainSensor(coordinator, entry, "last_move_peak_current", "Last move peak current", "mdi:chart-bell-curve"),
-            LocalBrainSensor(coordinator, entry, "travel_counts", "Travel", "mdi:ruler"),
+            LocalBrainSensor(coordinator, entry, "last_move_effort", "Last move effort", "mdi:arm-flex",
+                             unit=PERCENTAGE, attrs={"current": "effort_current", "limit": "effort_limit",
+                                                     "peak_current": "last_move_peak_current"}),
+            LocalBrainSensor(coordinator, entry, "travel_inches", "Travel", "mdi:ruler",
+                             unit=UnitOfLength.INCHES, device_class=SensorDeviceClass.DISTANCE),
         ])
         return
     async_add_entities(
@@ -168,20 +177,28 @@ class WayznFirmwareSensor(WayznSettingEntity, SensorEntity):
 
 
 class LocalBrainSensor(CoordinatorEntity, SensorEntity):
-    """A live reading from the door (local mode): motor current in the STM32's own units.
-    Unknown when the door isn't fresh."""
+    """A live reading from the door (local mode). Unknown when the door isn't fresh.
+
+    Last move effort: the motor current as a % of the motor controller's own current limit at that
+    moment (the limit follows the door's learned effort profile; over 100 % for ~350 ms is the
+    controller's own obstruction reversal), the highest of the move. The current's scale in amps
+    isn't known, so the raw values are attributes only."""
 
     _attr_has_entity_name = True
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, coordinator, entry: ConfigEntry, key: str, name: str, icon: str) -> None:
+    def __init__(self, coordinator, entry: ConfigEntry, key: str, name: str, icon: str, unit=None,
+                 device_class=None, attrs: Optional[Dict[str, str]] = None) -> None:
         super().__init__(coordinator)
         self._key = key
+        self._attrs = attrs or {}
         device_id = entry.data[CONF_DEVICE_ID]
         self._attr_unique_id = f"{device_id}_{key}"
         self._attr_name = name
         self._attr_icon = icon
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_class = device_class
         self._attr_device_info = {
             "identifiers": {(DOMAIN, device_id)},
             "name": entry.data[CONF_DEVICE_LABEL],
@@ -190,8 +207,16 @@ class LocalBrainSensor(CoordinatorEntity, SensorEntity):
         }
 
     @property
-    def native_value(self) -> Optional[int]:
+    def _brain(self) -> Dict[str, Any]:
+        return (self.coordinator.data or {}).get("brain") or {}
+
+    @property
+    def native_value(self) -> Optional[float]:
         if self.coordinator.stale:
             return None
-        v = ((self.coordinator.data or {}).get("brain") or {}).get(self._key)
+        v = self._brain.get(self._key)
         return None if v is None or v < 0 else v
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        return {name: self._brain.get(key) for name, key in self._attrs.items()}

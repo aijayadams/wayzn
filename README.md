@@ -86,13 +86,13 @@ creating the entry.
 | Hold open time | number (config), 3-600 s | How long the doorway must be clear before an auto-close |
 | Open position | number (config), 2.7-16.8 in | How far the door opens, in inches |
 | Presence threshold | number (config), 0.3-10 | Thermal score that means "a dog wants out" (lower = more sensitive) |
-| Motor current, Last move peak current | sensor (diagnostic) | Live motor current and the peak of the last move, in the door controller's own units |
+| Last move effort | sensor (diagnostic), % | The motor current as a % of the door controller's own current limit (which follows the door's learned effort profile), the highest of the last move. Over 100 % is the controller's own obstruction reversal. Raw current and limit are attributes (the scale in amps isn't known) |
 | Presence | binary sensor (motion) | The door's thermal sensor sees a dog that wants out (what triggers auto open) |
 | Obstruction | binary sensor (occupancy) | The doorway isn't clear: the door won't close, and a closing door reverses |
 | Fault | binary sensor (problem) | On while the door has a latched fault (`reason` attribute); it then holds itself open and refuses closes. Unknown when the door isn't reporting |
 | Clear fault | button | Clears a fault the door latched (it holds itself open until then) |
-| Expected travel | number (config) | The door's full travel in encoder counts. A calibration that measures more than 2 % off is rejected and retried (3 failures: fault). 0 = no check |
-| Travel | sensor | Full travel as the door's motor controller last measured it (counts) |
+| Expected travel | number (config), in | The door's full travel. A calibration that measures more than 2 % off is rejected and retried (3 failures: fault); also the travel the door uses when it zeroes itself as closed after its motor controller restarts at the closed end mid-calibration. 0 = none. Set it from the Travel sensor after a good calibration |
+| Travel | sensor, in | Full travel as the door's motor controller last measured it |
 | Occupied threshold | number (config), 0.2-5 | The safety level that blocks and reverses closing; must not exceed the presence threshold |
 
 The integration polls the controller every second. If the controller is unreachable or its status is
