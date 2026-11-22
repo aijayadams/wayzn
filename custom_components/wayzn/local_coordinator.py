@@ -8,7 +8,8 @@ interface the cover entity already uses with the cloud coordinator:
 
 Principles (AGENTS.md): never show a stale state (unknown instead); commands are
 always sent whatever the believed state; open is retried; a command that doesn't
-reach its target is surfaced, never silent; oscillation is surfaced as an error.
+reach its target is surfaced, never silent; the door's own faults (including oscillation: 3
+reversals in 2 min), a lost position and a dead thermal sensor are surfaced as notifications.
 """
 
 from __future__ import annotations
@@ -16,9 +17,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections import deque
 from datetime import timedelta
-from typing import Any, Deque, Dict, Optional
+from typing import Any, Dict, Optional
 
 import aiohttp
 from homeassistant.core import HomeAssistant
@@ -40,10 +40,11 @@ COMMAND_VERIFY_DELAYS = (5, 15, 30)
 # A close the door accepted while the doorway was occupied runs once it clears (the door gives up
 # after 5 min), so check over a longer window before calling it failed.
 PENDING_CLOSE_VERIFY_DELAYS = (30, 120, 320)
-OSCILLATION_WINDOW_S = 300
-OSCILLATION_MAX_TRANSITIONS = 3
 NOTIFY_COMMAND_ID = "wayzn_command_failed"
-NOTIFY_OSC_ID = "wayzn_oscillation"
+NOTIFY_FAULT_ID = "wayzn_fault"
+NOTIFY_POSITION_ID = "wayzn_position_unknown"
+NOTIFY_SENSOR_ID = "wayzn_sensor_down"
+DOOR_ALERT_AFTER_S = 120  # position unknown / sensor down this long (a reboot or calibration is shorter)
 NOTIFY_LINK_ID = "wayzn_brain_unreachable"
 LINK_ALERT_AFTER_S = 120
 
@@ -67,9 +68,9 @@ class LocalBrainCoordinator(DataUpdateCoordinator):
         self._command_seq = 0
         self._consecutive_command_failures = 0
         self._command_anomaly_active = False
-        self._transitions: Deque[float] = deque()
-        self._last_terminal: Optional[str] = None
-        self._oscillation_active = False
+        self._fault: Optional[str] = None
+        self._bad_since: Dict[str, float] = {}
+        self._alerts: set = set()
         self._link_alert_active = False
 
     # ------------------------------------------------------------------ http
@@ -116,7 +117,7 @@ class LocalBrainCoordinator(DataUpdateCoordinator):
             state = "unknown"
         else:
             self._exit_stale()
-        self._track_transitions(state)
+        self._check_door_alerts(body)
         moving = state in ("opening", "closing")
         active = moving or time.monotonic() < self._active_until
         self.update_interval = POLL_ACTIVE if active else POLL_IDLE
@@ -157,31 +158,62 @@ class LocalBrainCoordinator(DataUpdateCoordinator):
             self._link_alert_active = False
             self._dismiss(NOTIFY_LINK_ID)
 
-    # ------------------------------------------------------------------ oscillation
-    def _track_transitions(self, state: str) -> None:
-        if state not in ("open", "closed"):
+    # ------------------------------------------------------------------ door alerts
+    def _check_door_alerts(self, b: Dict[str, Any]) -> None:
+        """The door's own problems, as notifications: a latched fault at once (the door then holds
+        itself open; oscillation is one), a lost position or a dead sensor after 2 min."""
+        fault = b.get("fault")
+        if fault and fault != self._fault:
+            _LOGGER.error("DOG DOOR FAULT: %s", fault)
+            self._notify(
+                NOTIFY_FAULT_ID,
+                "Dog door fault",
+                f"The dog door latched a fault: {fault}. It holds itself open and won't close until "
+                "the fault is cleared. Check the door, then press its 'Clear fault' button.",
+            )
+        elif not fault and self._fault:
+            _LOGGER.info("wayzn-brain fault cleared (was: %s)", self._fault)
+            self._dismiss(NOTIFY_FAULT_ID)
+        self._fault = fault or None
+        self._sustained(
+            NOTIFY_POSITION_ID, b.get("position") not in (None, "known"),
+            "Dog door doesn't know its position",
+            "The dog door has lost its position (motor controller restarted?). It still opens for a dog, "
+            "but won't close until it is calibrated (console `cal`).",
+        )
+        self._sustained(
+            NOTIFY_SENSOR_ID, b.get("grideye_ok") is False,
+            "Dog door can't see the doorway",
+            "The dog door's thermal sensor isn't reading. Auto-open doesn't work and the door won't close.",
+        )
+
+    def _sustained(self, nid: str, bad: bool, title: str, message: str) -> None:
+        now = time.time()
+        if not bad:
+            self._bad_since.pop(nid, None)
+            if nid in self._alerts:
+                self._alerts.discard(nid)
+                self._dismiss(nid)
             return
-        if self._last_terminal is not None and state != self._last_terminal:
-            now = time.monotonic()
-            self._transitions.append(now)
-            while self._transitions and now - self._transitions[0] > OSCILLATION_WINDOW_S:
-                self._transitions.popleft()
-            if len(self._transitions) > OSCILLATION_MAX_TRANSITIONS and not self._oscillation_active:
-                self._oscillation_active = True
-                _LOGGER.error(
-                    "DOG DOOR OSCILLATING: %d open/closed transitions in %ds",
-                    len(self._transitions), OSCILLATION_WINDOW_S,
-                )
-                self._notify(
-                    NOTIFY_OSC_ID,
-                    "Dog door is oscillating",
-                    f"{len(self._transitions)} open/closed transitions in {OSCILLATION_WINDOW_S}s. "
-                    "This is a fault, not normal use: check the door and its automations.",
-                )
-            elif len(self._transitions) <= 1 and self._oscillation_active:
-                self._oscillation_active = False
-                self._dismiss(NOTIFY_OSC_ID)
-        self._last_terminal = state
+        since = self._bad_since.setdefault(nid, now)
+        if nid not in self._alerts and now - since >= DOOR_ALERT_AFTER_S:
+            self._alerts.add(nid)
+            _LOGGER.error("%s", title)
+            self._notify(nid, title, message)
+
+    async def async_clear_fault(self) -> None:
+        """POST /api/clear_fault, then confirm the door reports no fault."""
+        try:
+            status, body = await self._request("POST", "/api/clear_fault")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise HomeAssistantError(f"Dog door unreachable: {e}") from e
+        if status != 200 or not body.get("ok"):
+            raise HomeAssistantError(f"Dog door refused clear fault: {body.get('reason') or status}")
+        await self.async_refresh()
+        left = ((self.data or {}).get("brain") or {}).get("fault")
+        if left:
+            raise HomeAssistantError(f"Dog door still reports a fault: {left}")
+        _LOGGER.info("wayzn-brain fault cleared from Home Assistant")
 
     # ------------------------------------------------------------------ commands
     async def async_send_command(self, command: str) -> None:
@@ -350,7 +382,8 @@ class LocalBrainCoordinator(DataUpdateCoordinator):
             "last_poll_at": iso(self._last_poll_at),
             "last_ok_at": iso(self._last_ok_at),
             "consecutive_command_failures": self._consecutive_command_failures,
-            "oscillation": self._oscillation_active,
+            "fault": self._fault,
+            "alerts": sorted(self._alerts),
             "door_detail": b.get("detail"),
             "door_position": b.get("position"),
             "door_fault": b.get("fault"),

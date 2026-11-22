@@ -138,14 +138,43 @@ def test_command_that_misses_target_notifies(hass, run):
     assert any(d.get("notification_id") == lc.NOTIFY_COMMAND_ID for _, s, d in hass.service_calls if s == "create")
 
 
-def test_oscillation_is_an_error(hass, run):
-    seq = [_status(s) for s in ["open", "closed", "open", "closed", "open"]]
+def _created(hass, nid):
+    return [d for _, sv, d in hass.service_calls if sv == "create" and d.get("notification_id") == nid]
+
+
+def test_door_fault_notifies_at_once_and_clears(hass, run):
+    seq = [_status("open", fault="oscillation: 3 reversals in 2 min"), _status("open")]
     c = _coord(hass, {"/api/status": seq})
-    for _ in seq:
-        run(c.async_refresh())
+    run(c.async_refresh())
     run(hass.run_tasks())
-    assert c.diagnostics["oscillation"]
-    assert any(d.get("notification_id") == lc.NOTIFY_OSC_ID for _, s, d in hass.service_calls if s == "create")
+    assert c.diagnostics["fault"] and len(_created(hass, lc.NOTIFY_FAULT_ID)) == 1
+    run(c.async_refresh())
+    run(hass.run_tasks())
+    assert c.diagnostics["fault"] is None
+    assert any(sv == "dismiss" and d.get("notification_id") == lc.NOTIFY_FAULT_ID for _, sv, d in hass.service_calls)
+
+
+def test_lost_position_notifies_only_when_sustained(hass, run, monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(lc.time, "time", lambda: now[0])
+    c = _coord(hass, {"/api/status": [_status("open", position="unknown")] * 3})
+    run(c.async_refresh())
+    now[0] += 60
+    run(c.async_refresh())
+    run(hass.run_tasks())
+    assert not _created(hass, lc.NOTIFY_POSITION_ID)
+    now[0] += lc.DOOR_ALERT_AFTER_S
+    run(c.async_refresh())
+    run(hass.run_tasks())
+    assert len(_created(hass, lc.NOTIFY_POSITION_ID)) == 1
+
+
+def test_clear_fault_is_confirmed(hass, run):
+    c = _coord(hass, {"/api/clear_fault": [(200, {"ok": True})], "/api/status": [_status("open")]})
+    run(c.async_clear_fault())
+    c2 = _coord(hass, {"/api/clear_fault": [(200, {"ok": True})], "/api/status": [_status("open", fault="x")]})
+    with pytest.raises(HomeAssistantError, match="still reports a fault"):
+        run(c2.async_clear_fault())
 
 
 def test_auto_toggle_is_confirmed(hass, run):

@@ -89,14 +89,15 @@ creating the entry.
 | Motor current, Last move peak current | sensor (diagnostic) | Live motor current and the peak of the last move, in the door controller's own units |
 | Presence | binary sensor (motion) | The door's thermal sensor sees a dog that wants out (what triggers auto open) |
 | Obstruction | binary sensor (occupancy) | The doorway isn't clear: the door won't close, and a closing door reverses |
+| Clear fault | button | Clears a fault the door latched (it holds itself open until then) |
 | Occupied threshold | number (config), 0.2-5 | The safety level that blocks and reverses closing; must not exceed the presence threshold |
 
-The integration polls the controller every 5s (every 1s while the door moves
-or just after a command). If the controller is unreachable or its status is
+The integration polls the controller every second. If the controller is unreachable or its status is
 old, the state is **unknown**, never a guess, and the cover stays available so
 open/close can still be sent. Opens are retried on network errors; a command
-the door doesn't carry out, an unreachable controller, or a door that keeps
-flapping open/closed raises a persistent notification. The cloud-only
+the door doesn't carry out, an unreachable controller, a fault the door latched
+(including oscillation), a door that has lost its position or a thermal sensor
+that isn't reading raises a persistent notification. The cloud-only
 entities below (schedule, settings, detection grid) don't exist in local mode.
 
 #### Cloud mode configuration
