@@ -37,6 +37,9 @@ HTTP_TIMEOUT_S = 4
 OPEN_ATTEMPTS = 3  # never lock a dog out: retry an open on network errors
 STALE_STATUS_MS = 15000  # the brain already reports unknown past this; double check here
 COMMAND_VERIFY_DELAYS = (5, 15, 30)
+# A close the door accepted while the doorway was occupied runs once it clears (the door gives up
+# after 5 min), so check over a longer window before calling it failed.
+PENDING_CLOSE_VERIFY_DELAYS = (30, 120, 320)
 OSCILLATION_WINDOW_S = 300
 OSCILLATION_MAX_TRANSITIONS = 3
 NOTIFY_COMMAND_ID = "wayzn_command_failed"
@@ -204,7 +207,8 @@ class LocalBrainCoordinator(DataUpdateCoordinator):
                 self.update_interval = POLL_ACTIVE
                 await self.async_request_refresh()
                 if command != "stop":
-                    self._schedule_verification(command, seq)
+                    pending = command == "close" and "waiting" in (body.get("reason") or "")
+                    self._schedule_verification(command, seq, PENDING_CLOSE_VERIFY_DELAYS if pending else COMMAND_VERIFY_DELAYS)
                 return
             reason = body.get("reason") or f"HTTP {status}"
             if status == 401:
@@ -278,10 +282,10 @@ class LocalBrainCoordinator(DataUpdateCoordinator):
                 raise HomeAssistantError(f"Dog door reports {k}={have} after setting it to {v}")
         _LOGGER.info("wayzn-brain settings changed: %s", changes)
 
-    def _schedule_verification(self, command: str, seq: int) -> None:
+    def _schedule_verification(self, command: str, seq: int, delays=COMMAND_VERIFY_DELAYS) -> None:
         target = "open" if command == "open" else "closed"
-        for delay in COMMAND_VERIFY_DELAYS:
-            final = delay == COMMAND_VERIFY_DELAYS[-1]
+        for delay in delays:
+            final = delay == delays[-1]
             self.hass.loop.call_later(
                 delay,
                 lambda d=delay, f=final: self.hass.async_create_task(self._verify(seq, target, d, f)),
@@ -354,6 +358,7 @@ class LocalBrainCoordinator(DataUpdateCoordinator):
             "door_presence": b.get("presence"),
             "door_auto": b.get("auto"),
             "door_hold": b.get("hold"),
+            "door_close_pending": b.get("close_pending"),
             "door_grideye_ok": b.get("grideye_ok"),
             "door_status_age_ms": b.get("status_age_ms"),
             "door_uptime_s": b.get("uptime_s"),

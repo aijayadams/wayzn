@@ -116,6 +116,12 @@ def test_open_that_never_arrives_is_surfaced(hass, run):
     assert any(s == "create" and d["notification_id"] == lc.NOTIFY_COMMAND_ID for _, s, d in hass.service_calls)
 
 
+def test_close_waiting_for_clear_doorway_is_accepted_with_long_verification(hass, run):
+    c = _coord(hass, {"/api/close": [(200, {"ok": True, "reason": "waiting for the doorway to clear"})]})
+    run(c.async_send_command("close"))
+    assert [h.delay for h in hass.loop.later] == list(lc.PENDING_CLOSE_VERIFY_DELAYS)
+
+
 def test_refused_close_says_why_and_is_not_retried(hass, run):
     c = _coord(hass, {"/api/close": [(409, {"ok": False, "reason": "doorway not clear"})]})
     with pytest.raises(HomeAssistantError, match="doorway not clear"):
