@@ -1,6 +1,6 @@
 """Local mode: talk to the wayzn-brain ESP32 on the door over the LAN.
 
-The Wayzn cloud is gone; the door now runs our own brain (aijayadams/wayzn-brain,
+The Wayzn cloud is gone; the door now runs the wayzn-brain firmware (aijayadams/wayzn-afterlife,
 docs/API.md). This coordinator speaks its small HTTP API and offers the same
 interface the cover entity already uses with the cloud coordinator:
 ``data["state"]``, ``stale``, ``last_update_success``, ``diagnostics`` and

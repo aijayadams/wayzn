@@ -13,7 +13,7 @@ CONF_WKEY = "wkey"
 CONF_KNUM = "knum"
 CONF_AGENTURL = "agenturl"
 
-# Local mode (wayzn-brain on the door, aijayadams/wayzn-brain docs/API.md)
+# Local mode (wayzn-brain firmware on the door; API: aijayadams/wayzn-afterlife docs/API.md)
 CONF_MODE = "mode"
 MODE_CLOUD = "cloud"
 MODE_LOCAL = "local"
