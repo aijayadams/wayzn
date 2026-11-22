@@ -20,7 +20,7 @@ MODE_LOCAL = "local"
 CONF_HOST = "host"
 CONF_TOKEN = "token"
 DEFAULT_LOCAL_HOST = "wayzn-esp.local"
-DEFAULT_LOCAL_LABEL = "Dog Door Direct"  # keeps entity_id cover.dog_door_direct
+DEFAULT_LOCAL_LABEL = "Dog Door"  # the device name; the cover is named after it (cover.dog_door)
 
 # Defaults
 DEFAULT_POLL_INTERVAL = 30  # seconds

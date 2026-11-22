@@ -53,11 +53,6 @@ class WayznCover(CoordinatorEntity, CoverEntity):
         return self._config_entry.data[CONF_DEVICE_ID]
 
     @property
-    def name(self) -> str:
-        """Return the name of the cover."""
-        return self._config_entry.data[CONF_DEVICE_LABEL]
-
-    @property
     def device_info(self) -> Dict[str, Any]:
         """Return device information."""
         return {

@@ -42,7 +42,7 @@
       },
       "local": {
         "title": "Local dog door (wayzn-brain)",
-        "description": "Host and API token of the door's wayzn-brain (see docs/API.md in aijayadams/wayzn-afterlife). Keep the name 'Dog Door Direct' to keep entity id cover.dog_door_direct; remove the old cloud entry first.",
+        "description": "Host and API token of the door's wayzn-brain (see docs/API.md in aijayadams/wayzn-afterlife). To replace a cloud entry and keep its entity ids, remove the cloud entry first and enter its device id.",
         "data": {
           "host": "Host or IP",
           "token": "API token",
