@@ -28,7 +28,7 @@ DEFAULT_TIMEOUT = 20  # seconds
 
 # Platforms
 PLATFORMS = ["cover", "sensor", "binary_sensor", "image", "switch"]
-LOCAL_PLATFORMS = ["cover", "switch", "number"]  # the door, its switches and its tunable settings
+LOCAL_PLATFORMS = ["cover", "switch", "number", "sensor"]  # the door, its switches and its tunable settings
 
 # Error messages
 ERROR_AUTH_FAILED = "auth_failed"

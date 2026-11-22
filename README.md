@@ -86,6 +86,8 @@ creating the entry.
 | Hold open time | number (config), 3-600 s | How long the doorway must be clear before an auto-close |
 | Open position | number (config), 2.7-16.8 in | How far the door opens, in inches |
 | Presence threshold | number (config), 0.3-10 | Thermal score that means "a dog wants out" (lower = more sensitive) |
+| Current cap | number (config), 400-1030 | Caps the motor driver's current (strength), in the door controller's own units; 1030 is the original setting and the maximum |
+| Motor current, Last move peak current | sensor (diagnostic) | Live motor current and the peak of the last move, in the same units as the cap |
 | Occupied threshold | number (config), 0.2-5 | The safety level that blocks and reverses closing; must not exceed the presence threshold |
 
 The integration polls the controller every 5s (every 1s while the door moves

@@ -9,7 +9,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_change
 
-from .const import DOMAIN
+from homeassistant.components.sensor import SensorStateClass
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import CONF_DEVICE_ID, CONF_DEVICE_LABEL, CONF_MODE, DOMAIN, MODE_LOCAL
 from .entity import WayznSettingEntity
 from .wayzn_client import wayzn_core as core
 
@@ -19,6 +22,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up Wayzn settings sensors."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
+    if entry.data.get(CONF_MODE) == MODE_LOCAL:
+        async_add_entities([
+            LocalBrainSensor(coordinator, entry, "motor_current", "Motor current", "mdi:current-ac"),
+            LocalBrainSensor(coordinator, entry, "last_move_peak_current", "Last move peak current", "mdi:chart-bell-curve"),
+        ])
+        return
     async_add_entities(
         [
             WayznDogSizeSensor(coordinator, entry),
@@ -155,3 +164,33 @@ class WayznFirmwareSensor(WayznSettingEntity, SensorEntity):
     @property
     def native_value(self) -> Optional[Any]:
         return self.setting
+
+
+class LocalBrainSensor(CoordinatorEntity, SensorEntity):
+    """A live reading from the door (local mode): motor current in the STM32's own units
+    (the same units as the Current cap setting). Unknown when the door isn't fresh."""
+
+    _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, entry: ConfigEntry, key: str, name: str, icon: str) -> None:
+        super().__init__(coordinator)
+        self._key = key
+        device_id = entry.data[CONF_DEVICE_ID]
+        self._attr_unique_id = f"{device_id}_{key}"
+        self._attr_name = name
+        self._attr_icon = icon
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, device_id)},
+            "name": entry.data[CONF_DEVICE_LABEL],
+            "manufacturer": "Wayzn",
+            "model": "Smart Pet Door",
+        }
+
+    @property
+    def native_value(self) -> Optional[int]:
+        if self.coordinator.stale:
+            return None
+        v = ((self.coordinator.data or {}).get("brain") or {}).get(self._key)
+        return None if v is None or v < 0 else v
