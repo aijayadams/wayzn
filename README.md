@@ -87,6 +87,8 @@ creating the entry.
 | Open position | number (config), 2.7-16.8 in | How far the door opens, in inches |
 | Presence threshold | number (config), 0.3-10 | Thermal score that means "a dog wants out" (lower = more sensitive) |
 | Motor current, Last move peak current | sensor (diagnostic) | Live motor current and the peak of the last move, in the door controller's own units |
+| Presence | binary sensor (motion) | The door's thermal sensor sees a dog that wants out (what triggers auto open) |
+| Obstruction | binary sensor (occupancy) | The doorway isn't clear: the door won't close, and a closing door reverses |
 | Occupied threshold | number (config), 0.2-5 | The safety level that blocks and reverses closing; must not exceed the presence threshold |
 
 The integration polls the controller every 5s (every 1s while the door moves

@@ -9,7 +9,9 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_change
 
-from .const import DOMAIN
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import CONF_DEVICE_ID, CONF_DEVICE_LABEL, CONF_MODE, DOMAIN, MODE_LOCAL
 from .entity import WayznSettingEntity
 from .wayzn_client import wayzn_core as core
 
@@ -32,6 +34,14 @@ async def async_setup_entry(
 ) -> None:
     """Set up Wayzn settings binary sensors."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
+    if entry.data.get(CONF_MODE) == MODE_LOCAL:
+        async_add_entities([
+            LocalDetectionSensor(coordinator, entry, "presence", "Presence", BinarySensorDeviceClass.MOTION,
+                                 "mdi:dog-side"),
+            LocalDetectionSensor(coordinator, entry, "occupied", "Obstruction", BinarySensorDeviceClass.OCCUPANCY,
+                                 "mdi:shield-alert-outline"),
+        ])
+        return
     entities: list = [WayznFlagSensor(coordinator, entry, *flag) for flag in _FLAGS]
     entities.append(WayznScheduleWindowSensor(coordinator, entry))
     entities.append(WayznPetTagReceiverSensor(coordinator, entry))
@@ -98,3 +108,46 @@ class WayznPetTagReceiverSensor(WayznSettingEntity, BinarySensorEntity):
     @property
     def is_on(self) -> Optional[bool]:
         return self.setting
+
+
+# A detection seen this recently by the door counts as "on", so a short visit that starts and
+# ends between two polls (1 s apart) still shows up in HA.
+SEEN_WITHIN_MS = 1500
+
+
+class LocalDetectionSensor(CoordinatorEntity, BinarySensorEntity):
+    """The door's own view of its doorway (local mode, Grid-EYE).
+
+    Presence: a dog wants out (what triggers auto-open). Obstruction: the doorway is not
+    clear (the door won't close, and a closing door reverses). Unknown when the door's state
+    isn't fresh or its sensor isn't reading.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, entry: ConfigEntry, key: str, name: str, device_class, icon: str) -> None:
+        super().__init__(coordinator)
+        self._key = key
+        device_id = entry.data[CONF_DEVICE_ID]
+        self._attr_unique_id = f"{device_id}_{key}_detected"
+        self._attr_name = name
+        self._attr_device_class = device_class
+        self._attr_icon = icon
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, device_id)},
+            "name": entry.data[CONF_DEVICE_LABEL],
+            "manufacturer": "Wayzn",
+            "model": "Smart Pet Door",
+        }
+
+    @property
+    def is_on(self) -> Optional[bool]:
+        if self.coordinator.stale:
+            return None
+        b = (self.coordinator.data or {}).get("brain") or {}
+        if not b.get("grideye_ok", False):
+            return None
+        if b.get(self._key):
+            return True
+        age = b.get(f"{self._key}_age_ms")
+        return isinstance(age, (int, float)) and 0 <= age < SEEN_WITHIN_MS

@@ -30,7 +30,7 @@ from .const import CONF_HOST, CONF_TOKEN, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-POLL_IDLE = timedelta(seconds=5)
+POLL_IDLE = timedelta(seconds=1)  # the door's presence/obstruction are live signals (~50 ms per poll)
 POLL_ACTIVE = timedelta(seconds=1)  # while moving and for a while after a command
 ACTIVE_AFTER_COMMAND_S = 30
 HTTP_TIMEOUT_S = 4
