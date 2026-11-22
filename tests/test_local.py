@@ -43,9 +43,9 @@ class FakeSession:
         self.script = {k: list(v) for k, v in script.items()}
         self.calls = []
 
-    def request(self, method, url, headers=None, timeout=None):
+    def request(self, method, url, headers=None, timeout=None, json=None):
         path = url.split("//", 1)[1].split("/", 1)[1]
-        self.calls.append((method, "/" + path, headers))
+        self.calls.append((method, "/" + path, headers, json) if json is not None else (method, "/" + path, headers))
         nxt = self.script["/" + path].pop(0)
         if isinstance(nxt, Exception):
             raise nxt
@@ -140,6 +140,24 @@ def test_oscillation_is_an_error(hass, run):
     run(hass.run_tasks())
     assert c.diagnostics["oscillation"]
     assert any(d.get("notification_id") == lc.NOTIFY_OSC_ID for _, s, d in hass.service_calls if s == "create")
+
+
+def test_auto_toggle_is_confirmed(hass, run):
+    c = _coord(hass, {"/api/auto": [(200, {"ok": True})], "/api/status": [_status(auto=False)]})
+    run(c.async_set_auto(False))
+    assert hass.session.calls[0][3] == {"on": False}
+
+
+def test_auto_toggle_that_does_not_take_raises(hass, run):
+    c = _coord(hass, {"/api/auto": [(200, {"ok": True})], "/api/status": [_status(auto=True)]})
+    with pytest.raises(HomeAssistantError, match="auto=True"):
+        run(c.async_set_auto(False))
+
+
+def test_auto_toggle_refused_raises(hass, run):
+    c = _coord(hass, {"/api/auto": [(400, {"ok": False, "reason": "bad body"})]})
+    with pytest.raises(HomeAssistantError, match="bad body"):
+        run(c.async_set_auto(True))
 
 
 @pytest.mark.skipif(not os.environ.get("WAYZN_BRAIN_HOST"), reason="set WAYZN_BRAIN_HOST/TOKEN for the live test")

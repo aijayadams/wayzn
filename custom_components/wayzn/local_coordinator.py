@@ -222,6 +222,32 @@ class LocalBrainCoordinator(DataUpdateCoordinator):
         self._command_anomaly_active = True
         raise HomeAssistantError(f"Dog door unreachable: {last_err}")
 
+    async def async_set_auto(self, on: bool) -> None:
+        """Turn the door's Grid-EYE auto-open on/off, then confirm it took."""
+        headers = {"Authorization": f"Bearer {self._token}"}
+        last_err: Optional[Exception] = None
+        for attempt in range(1, 4):
+            try:
+                async with self._session.request(
+                    "POST", self._base + "/api/auto", headers=headers, json={"on": on},
+                    timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S),
+                ) as resp:
+                    body = await resp.json(content_type=None) or {}
+                    if resp.status == 200 and body.get("ok"):
+                        break
+                    raise HomeAssistantError(f"Dog door refused auto {'on' if on else 'off'}: "
+                                             f"{body.get('reason') or resp.status}")
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_err = e
+                await asyncio.sleep(1)
+        else:
+            raise HomeAssistantError(f"Dog door unreachable: {last_err}")
+        await self.async_refresh()
+        got = ((self.data or {}).get("brain") or {}).get("auto")
+        if got is not on:
+            raise HomeAssistantError(f"Dog door reports auto={got} after setting it {on}")
+        _LOGGER.info("wayzn-brain auto-open %s", "on" if on else "off")
+
     def _schedule_verification(self, command: str, seq: int) -> None:
         target = "open" if command == "open" else "closed"
         for delay in COMMAND_VERIFY_DELAYS:

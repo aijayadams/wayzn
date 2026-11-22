@@ -28,7 +28,7 @@ DEFAULT_TIMEOUT = 20  # seconds
 
 # Platforms
 PLATFORMS = ["cover", "sensor", "binary_sensor", "image", "switch"]
-LOCAL_PLATFORMS = ["cover"]  # MVP: the door itself; settings stay on the door's console
+LOCAL_PLATFORMS = ["cover", "switch"]  # the door, and its auto-open (scheduled by HA)
 
 # Error messages
 ERROR_AUTH_FAILED = "auth_failed"
