@@ -91,6 +91,8 @@ creating the entry.
 | Obstruction | binary sensor (occupancy) | The doorway isn't clear: the door won't close, and a closing door reverses |
 | Fault | binary sensor (problem) | On while the door has a latched fault (`reason` attribute); it then holds itself open and refuses closes. Unknown when the door isn't reporting |
 | Clear fault | button | Clears a fault the door latched (it holds itself open until then) |
+| Expected travel | number (config) | The door's full travel in encoder counts. A calibration that measures more than 2 % off is rejected and retried (3 failures: fault). 0 = no check |
+| Travel | sensor | Full travel as the door's motor controller last measured it (counts) |
 | Occupied threshold | number (config), 0.2-5 | The safety level that blocks and reverses closing; must not exceed the presence threshold |
 
 The integration polls the controller every second. If the controller is unreachable or its status is

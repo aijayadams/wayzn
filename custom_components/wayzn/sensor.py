@@ -26,6 +26,7 @@ async def async_setup_entry(
         async_add_entities([
             LocalBrainSensor(coordinator, entry, "motor_current", "Motor current", "mdi:current-ac"),
             LocalBrainSensor(coordinator, entry, "last_move_peak_current", "Last move peak current", "mdi:chart-bell-curve"),
+            LocalBrainSensor(coordinator, entry, "travel_counts", "Travel", "mdi:ruler"),
         ])
         return
     async_add_entities(
