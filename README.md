@@ -84,7 +84,7 @@ creating the entry.
 | Auto close | switch (config) | After a sensor-triggered open, close once the doorway has been clear for the hold time (only while Auto open is on) |
 | Obstruction detection | switch (config) | The thermal sensor blocks and reverses closing when the doorway isn't clear. Off leaves only the door motor's current limit |
 | Hold open time | number (config), 3-600 s | How long the doorway must be clear before an auto-close |
-| Open position | number (config), 15-95 % | How far the door opens, as a share of its full travel |
+| Open position | number (config), 2.7-16.8 in | How far the door opens, in inches |
 | Presence threshold | number (config), 0.3-10 | Thermal score that means "a dog wants out" (lower = more sensitive) |
 | Occupied threshold | number (config), 0.2-5 | The safety level that blocks and reverses closing; must not exceed the presence threshold |
 

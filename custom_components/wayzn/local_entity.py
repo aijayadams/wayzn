@@ -19,11 +19,12 @@ class LocalSettingEntity(CoordinatorEntity):
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.CONFIG
 
-    def __init__(self, coordinator, entry: ConfigEntry, key: str, name: str) -> None:
+    def __init__(self, coordinator, entry: ConfigEntry, key: str, name: str, uid: Optional[str] = None) -> None:
         super().__init__(coordinator)
         self._key = key
         device_id = entry.data[CONF_DEVICE_ID]
-        self._attr_unique_id = f"{device_id}_{key}"
+        # uid keeps an entity's identity when the setting behind it changes (e.g. % -> inches)
+        self._attr_unique_id = f"{device_id}_{uid or key}"
         self._attr_name = name
         self._attr_device_info = {
             "identifiers": {(DOMAIN, device_id)},
