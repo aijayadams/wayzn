@@ -248,6 +248,36 @@ class LocalBrainCoordinator(DataUpdateCoordinator):
             raise HomeAssistantError(f"Dog door reports auto={got} after setting it {on}")
         _LOGGER.info("wayzn-brain auto-open %s", "on" if on else "off")
 
+    @property
+    def settings(self) -> Dict[str, Any]:
+        """The door's settings as last reported in /api/status (empty if unknown)."""
+        if self._stale:
+            return {}
+        return ((self.data or {}).get("brain") or {}).get("settings") or {}
+
+    async def async_set_settings(self, changes: Dict[str, Any]) -> None:
+        """POST /api/settings (all or nothing on the door), then confirm every value took."""
+        headers = {"Authorization": f"Bearer {self._token}"}
+        try:
+            async with self._session.request(
+                "POST", self._base + "/api/settings", headers=headers, json=changes,
+                timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S),
+            ) as resp:
+                body = await resp.json(content_type=None) or {}
+                status = resp.status
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise HomeAssistantError(f"Dog door unreachable: {e}") from e
+        if status != 200 or not body.get("ok"):
+            raise HomeAssistantError(f"Dog door refused {changes}: {body.get('reason') or status}")
+        await self.async_refresh()
+        got = self.settings
+        for k, v in changes.items():
+            have = got.get(k)
+            same = abs(have - v) <= 0.051 if isinstance(v, float) and isinstance(have, (int, float)) else have == v
+            if not same:
+                raise HomeAssistantError(f"Dog door reports {k}={have} after setting it to {v}")
+        _LOGGER.info("wayzn-brain settings changed: %s", changes)
+
     def _schedule_verification(self, command: str, seq: int) -> None:
         target = "open" if command == "open" else "closed"
         for delay in COMMAND_VERIFY_DELAYS:

@@ -160,6 +160,41 @@ def test_auto_toggle_refused_raises(hass, run):
         run(c.async_set_auto(True))
 
 
+def _status_settings(**kw):
+    st = _status()
+    st[1]["settings"] = {"auto_open": True, "auto_close": True, "obstruction_detection": True, "hold_s": 15,
+                         "open_percent": 45.2, "open_counts": -6136, "presence_threshold": 1.0,
+                         "occupied_threshold": 0.6, "noise_c": 0.7, **kw}
+    return st
+
+
+def test_settings_change_is_confirmed(hass, run):
+    c = _coord(hass, {"/api/settings": [(200, {"ok": True})], "/api/status": [_status_settings(hold_s=30)]})
+    run(c.async_set_settings({"hold_s": 30}))
+    assert hass.session.calls[0][3] == {"hold_s": 30}
+    assert c.settings["hold_s"] == 30
+
+
+def test_settings_refused_says_why(hass, run):
+    c = _coord(hass, {"/api/settings": [(400, {"ok": False, "reason": "hold_s out of range 3.00..600.00"})]})
+    with pytest.raises(HomeAssistantError, match="out of range"):
+        run(c.async_set_settings({"hold_s": 1}))
+
+
+def test_settings_that_do_not_take_raise(hass, run):
+    c = _coord(hass, {"/api/settings": [(200, {"ok": True})], "/api/status": [_status_settings(open_percent=45.2)]})
+    with pytest.raises(HomeAssistantError, match="open_percent"):
+        run(c.async_set_settings({"open_percent": 60.0}))
+
+
+def test_settings_unknown_when_stale(hass, run):
+    st = _status_settings()
+    st[1]["state"] = "unknown"
+    c = _coord(hass, {"/api/status": [st]})
+    run(c.async_refresh())
+    assert c.settings == {}
+
+
 @pytest.mark.skipif(not os.environ.get("WAYZN_BRAIN_HOST"), reason="set WAYZN_BRAIN_HOST/TOKEN for the live test")
 def test_live_status_only(hass, run):
     async def go():
@@ -171,5 +206,5 @@ def test_live_status_only(hass, run):
             await c.async_refresh()
             return c
     c = run(go())
-    print("live:", c.data["state"], c.diagnostics)
+    print("live:", c.data["state"], c.diagnostics, c.settings)
     assert c.last_update_success and c.data["state"] in ("open", "closed", "opening", "closing", "unknown")

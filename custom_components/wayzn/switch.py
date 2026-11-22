@@ -16,6 +16,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_DEVICE_ID, CONF_DEVICE_LABEL, CONF_MODE, DOMAIN, MODE_LOCAL
 from .entity import WayznSettingEntity
+from .local_entity import LocalSettingEntity
 from .wayzn_client import wayzn_core as core
 
 
@@ -25,7 +26,11 @@ async def async_setup_entry(
     """Cloud: one switch per detection cell. Local: the auto-open switch."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
     if entry.data.get(CONF_MODE) == MODE_LOCAL:
-        async_add_entities([WayznAutoOpenSwitch(coordinator, entry)])
+        async_add_entities([
+            WayznAutoOpenSwitch(coordinator, entry),
+            LocalSettingSwitch(coordinator, entry, "auto_close", "Auto close", "mdi:door-closed-lock"),
+            LocalSettingSwitch(coordinator, entry, "obstruction_detection", "Obstruction detection", "mdi:shield-check"),
+        ])
         return
     async_add_entities(
         WayznDetectionCellSwitch(coordinator, entry, row, col)
@@ -111,3 +116,27 @@ class WayznAutoOpenSwitch(CoordinatorEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self.coordinator.async_set_auto(False)
+
+
+class LocalSettingSwitch(LocalSettingEntity, SwitchEntity):
+    """A boolean door setting.
+
+    Auto close: after a presence open, close once the doorway has been clear for the hold
+    time (only while auto open is on). Obstruction detection: the Grid-EYE blocks and
+    reverses closing; off leaves only the door's own motor-current limit, so the door logs
+    a warning.
+    """
+
+    def __init__(self, coordinator, entry: ConfigEntry, key: str, name: str, icon: str) -> None:
+        super().__init__(coordinator, entry, key, name)
+        self._attr_icon = icon
+
+    @property
+    def is_on(self) -> Optional[bool]:
+        return self.setting
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._set(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._set(False)
