@@ -1,15 +1,6 @@
 {
   "config": {
     "step": {
-      "user": {
-        "title": "Connect to Wayzn",
-        "description": "Enter your Wayzn account credentials and Firebase API key",
-        "data": {
-          "email": "Email",
-          "password": "Password",
-          "api_key": "Firebase API Key"
-        }
-      },
       "device": {
         "title": "Add Wayzn Device",
         "description": "Enter your device's QR code. Format: QR-Code:base64key:knum:device_id:label",
@@ -31,13 +22,40 @@
           "password": "Password",
           "api_key": "Firebase API Key (leave unchanged if only password expired)"
         }
+      },
+      "user": {
+        "title": "Add a Wayzn door",
+        "description": "Local: the door's own wayzn-brain controller on your network. Cloud: the original Wayzn service (retired).",
+        "menu_options": {
+          "local": "Local (wayzn-brain on the door)",
+          "cloud": "Wayzn cloud (retired)"
+        }
+      },
+      "cloud": {
+        "title": "Connect to Wayzn",
+        "description": "Enter your Wayzn account credentials and Firebase API key",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "api_key": "Firebase API Key"
+        }
+      },
+      "local": {
+        "title": "Local dog door (wayzn-brain)",
+        "description": "Host and API token of the door's wayzn-brain (see wayzn-brain docs/API.md). Keep the name 'Dog Door Direct' to keep entity id cover.dog_door_direct; remove the old cloud entry first.",
+        "data": {
+          "host": "Host or IP",
+          "token": "API token",
+          "label": "Device name",
+          "device_id": "Device id (unique id)"
+        }
       }
     },
     "error": {
       "auth_failed": "Authentication failed. Check your email, password, and API key.",
       "invalid_qr": "Invalid QR code format. Expected: QR-Code:base64key:knum:device_id:label",
       "device_not_found": "Device not found. Make sure the device is registered with your Wayzn account.",
-      "cannot_connect": "Cannot connect to Wayzn service. Check your internet connection."
+      "cannot_connect": "Cannot reach the door. Check the host, and that it is on and on the network."
     },
     "abort": {
       "already_configured": "This device is already configured.",

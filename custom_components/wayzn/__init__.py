@@ -2,19 +2,28 @@
 
 import logging
 
-from .const import DOMAIN, PLATFORMS
+from .const import CONF_MODE, DOMAIN, LOCAL_PLATFORMS, MODE_LOCAL, PLATFORMS
 
 _LOGGER = logging.getLogger(__name__)
 
 
+def _platforms(entry):
+    return LOCAL_PLATFORMS if entry.data.get(CONF_MODE) == MODE_LOCAL else PLATFORMS
+
+
 async def async_setup_entry(hass, entry) -> bool:
     """Set up Wayzn from a config entry."""
-    from .coordinator import WayznDataUpdateCoordinator
-
     hass.data.setdefault(DOMAIN, {})
 
-    # Create coordinator
-    coordinator = WayznDataUpdateCoordinator(hass, entry)
+    # Create coordinator: local (wayzn-brain on the door) or the original cloud client
+    if entry.data.get(CONF_MODE) == MODE_LOCAL:
+        from .local_coordinator import LocalBrainCoordinator
+
+        coordinator = LocalBrainCoordinator(hass, entry)
+    else:
+        from .coordinator import WayznDataUpdateCoordinator
+
+        coordinator = WayznDataUpdateCoordinator(hass, entry)
 
     # Perform first refresh (poll)
     try:
@@ -32,7 +41,7 @@ async def async_setup_entry(hass, entry) -> bool:
     await hass.async_add_executor_job(coordinator.start_streaming)
 
     # Forward setup to platforms
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await hass.config_entries.async_forward_entry_setups(entry, _platforms(entry))
 
     # Register update listener
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
@@ -48,7 +57,7 @@ async def async_unload_entry(hass, entry) -> bool:
         await hass.async_add_executor_job(coordinator.stop_streaming)
 
     # Unload platforms
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, _platforms(entry))
 
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)

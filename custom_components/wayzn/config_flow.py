@@ -9,6 +9,12 @@ from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
+    CONF_HOST,
+    CONF_MODE,
+    CONF_TOKEN,
+    DEFAULT_LOCAL_HOST,
+    DEFAULT_LOCAL_LABEL,
+    MODE_LOCAL,
     CONF_AGENTURL,
     CONF_API_KEY,
     CONF_DEVICE_ID,
@@ -42,7 +48,70 @@ class WayznConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: Optional[Dict[str, Any]] = None
     ) -> ConfigFlowResult:
-        """Handle the initial step - collect Firebase credentials."""
+        """Choose: the local wayzn-brain door, or the (retired) Wayzn cloud."""
+        return self.async_show_menu(step_id="user", menu_options=["local", "cloud"])
+
+    async def async_step_local(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ) -> ConfigFlowResult:
+        """Local mode: the door's own wayzn-brain HTTP API on the LAN."""
+        errors: Dict[str, str] = {}
+        if user_input is not None:
+            host = user_input[CONF_HOST].strip()
+            token = user_input[CONF_TOKEN].strip()
+            device_id = user_input[CONF_DEVICE_ID].strip()
+            try:
+                import aiohttp
+                from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+                session = async_get_clientsession(self.hass)
+                async with session.get(
+                    f"http://{host}/api/status",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 401:
+                        errors["base"] = ERROR_AUTH_FAILED
+                    elif resp.status != 200:
+                        errors["base"] = ERROR_CANNOT_CONNECT
+                    else:
+                        body = await resp.json(content_type=None)
+                        if "state" not in body:
+                            errors["base"] = ERROR_CANNOT_CONNECT
+            except Exception as e:  # unreachable, DNS, timeout
+                _LOGGER.error("wayzn-brain not reachable at %s: %s", host, e)
+                errors["base"] = ERROR_CANNOT_CONNECT
+            if not errors:
+                await self.async_set_unique_id(device_id)
+                self._abort_if_unique_id_configured()
+                label = user_input[CONF_DEVICE_LABEL].strip()
+                return self.async_create_entry(
+                    title=label,
+                    data={
+                        CONF_MODE: MODE_LOCAL,
+                        CONF_HOST: host,
+                        CONF_TOKEN: token,
+                        CONF_DEVICE_ID: device_id,
+                        CONF_DEVICE_LABEL: label,
+                    },
+                )
+        return self.async_show_form(
+            step_id="local",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_HOST, default=DEFAULT_LOCAL_HOST): cv.string,
+                    vol.Required(CONF_TOKEN): cv.string,
+                    vol.Required(CONF_DEVICE_LABEL, default=DEFAULT_LOCAL_LABEL): cv.string,
+                    vol.Required(CONF_DEVICE_ID, default="wayzn-brain"): cv.string,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_cloud(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ) -> ConfigFlowResult:
+        """Handle the cloud step - collect Firebase credentials."""
         errors: Dict[str, str] = {}
 
         if user_input is not None:
@@ -75,7 +144,7 @@ class WayznConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = ERROR_AUTH_FAILED
 
         return self.async_show_form(
-            step_id="user",
+            step_id="cloud",
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_EMAIL): cv.string,
