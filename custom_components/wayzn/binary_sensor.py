@@ -40,6 +40,7 @@ async def async_setup_entry(
                                  "mdi:dog-side"),
             LocalDetectionSensor(coordinator, entry, "occupied", "Obstruction", BinarySensorDeviceClass.OCCUPANCY,
                                  "mdi:shield-alert-outline"),
+            LocalFaultSensor(coordinator, entry),
         ])
         return
     entities: list = [WayznFlagSensor(coordinator, entry, *flag) for flag in _FLAGS]
@@ -151,3 +152,39 @@ class LocalDetectionSensor(CoordinatorEntity, BinarySensorEntity):
             return True
         age = b.get(f"{self._key}_age_ms")
         return isinstance(age, (int, float)) and 0 <= age < SEEN_WITHIN_MS
+
+
+class LocalFaultSensor(CoordinatorEntity, BinarySensorEntity):
+    """On while the door has a latched fault (reason in the `reason` attribute). The door then
+    holds itself open and refuses closes until the fault is cleared; if its open failed too, it may
+    be stuck closed. Unknown when the door's state isn't fresh: never a silent "off"."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Fault"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        device_id = entry.data[CONF_DEVICE_ID]
+        self._attr_unique_id = f"{device_id}_fault"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, device_id)},
+            "name": entry.data[CONF_DEVICE_LABEL],
+            "manufacturer": "Wayzn",
+            "model": "Smart Pet Door",
+        }
+
+    def _brain(self) -> Optional[Dict[str, Any]]:
+        if self.coordinator.stale:
+            return None
+        return (self.coordinator.data or {}).get("brain") or None
+
+    @property
+    def is_on(self) -> Optional[bool]:
+        b = self._brain()
+        return None if b is None else bool(b.get("fault"))
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        b = self._brain() or {}
+        return {"reason": b.get("fault"), "door": b.get("detail")}

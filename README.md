@@ -89,6 +89,7 @@ creating the entry.
 | Motor current, Last move peak current | sensor (diagnostic) | Live motor current and the peak of the last move, in the door controller's own units |
 | Presence | binary sensor (motion) | The door's thermal sensor sees a dog that wants out (what triggers auto open) |
 | Obstruction | binary sensor (occupancy) | The doorway isn't clear: the door won't close, and a closing door reverses |
+| Fault | binary sensor (problem) | On while the door has a latched fault (`reason` attribute); it then holds itself open and refuses closes. Unknown when the door isn't reporting |
 | Clear fault | button | Clears a fault the door latched (it holds itself open until then) |
 | Occupied threshold | number (config), 0.2-5 | The safety level that blocks and reverses closing; must not exceed the presence threshold |
 

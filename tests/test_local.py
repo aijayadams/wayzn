@@ -243,3 +243,4 @@ def test_live_status_only(hass, run):
     c = run(go())
     print("live:", c.data["state"], c.diagnostics, c.settings)
     assert c.last_update_success and c.data["state"] in ("open", "closed", "opening", "closing", "unknown")
+
