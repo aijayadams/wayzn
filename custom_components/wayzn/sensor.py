@@ -35,7 +35,7 @@ async def async_setup_entry(
                              unit=PERCENTAGE, attrs={"current": "effort_current", "limit": "effort_limit",
                                                      "peak_current": "last_move_peak_current"}),
             LocalBrainSensor(coordinator, entry, "travel_inches", "Travel", "mdi:ruler",
-                             unit=UnitOfLength.INCHES, device_class=SensorDeviceClass.DISTANCE),
+                             unit=UnitOfLength.INCHES, device_class=SensorDeviceClass.DISTANCE, precision=2),
         ])
         return
     async_add_entities(
@@ -189,7 +189,7 @@ class LocalBrainSensor(CoordinatorEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, entry: ConfigEntry, key: str, name: str, icon: str, unit=None,
-                 device_class=None, attrs: Optional[Dict[str, str]] = None) -> None:
+                 device_class=None, attrs: Optional[Dict[str, str]] = None, precision: Optional[int] = None) -> None:
         super().__init__(coordinator)
         self._key = key
         self._attrs = attrs or {}
@@ -199,6 +199,7 @@ class LocalBrainSensor(CoordinatorEntity, SensorEntity):
         self._attr_icon = icon
         self._attr_native_unit_of_measurement = unit
         self._attr_device_class = device_class
+        self._attr_suggested_display_precision = precision
         self._attr_device_info = {
             "identifiers": {(DOMAIN, device_id)},
             "name": entry.data[CONF_DEVICE_LABEL],
