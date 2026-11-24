@@ -86,7 +86,10 @@ creating the entry.
 | Hold open time | number (config), 3-600 s | How long the doorway must be clear before an auto-close |
 | Open position | number (config), 2.7-16.8 in | How far the door opens, in inches |
 | Presence threshold | number (config), 0.3-10 | Thermal score that means "a dog wants out" (lower = more sensitive) |
-| Last move effort | sensor (diagnostic), % | The motor current as a % of the door controller's own current limit (which follows the door's learned effort profile), the highest of the last move. Over 100 % is the controller's own obstruction reversal. Raw current and limit are attributes (the scale in amps isn't known) |
+| Last move effort | sensor (diagnostic), % | The motor current as a % of the door controller's own current limit (which follows the door's learned effort profile), the highest of the last move. Over 100 % is the controller's own obstruction reversal. The current and limit behind it are attributes (mA) |
+| Last move current | sensor (diagnostic), A | Peak motor current of the last move (a normal close ends ~0.40 A; the controller's obstruction limit is ~0.67 A) |
+| Last move current limit | sensor (diagnostic), A | The controller's current limit at the move's highest effort |
+| Motor current | sensor (diagnostic), A | Live motor current (~0.03 A at rest); updated every second while the door moves |
 | Presence | binary sensor (motion) | The door's thermal sensor sees a dog that wants out (what triggers auto open) |
 | Obstruction | binary sensor (occupancy) | The doorway isn't clear: the door won't close, and a closing door reverses |
 | Fault | binary sensor (problem) | On while the door has a latched fault (`reason` attribute); it then holds itself open and refuses closes. Unknown when the door isn't reporting |

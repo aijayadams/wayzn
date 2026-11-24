@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfLength
+from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfElectricCurrent, UnitOfLength
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -32,8 +32,13 @@ async def async_setup_entry(
                 registry.async_remove(old_id)
         async_add_entities([
             LocalBrainSensor(coordinator, entry, "last_move_effort", "Last move effort", "mdi:arm-flex",
-                             unit=PERCENTAGE, attrs={"current": "effort_current", "limit": "effort_limit",
-                                                     "peak_current": "last_move_peak_current"}),
+                             unit=PERCENTAGE, attrs={"current_ma": "effort_current", "limit_ma": "effort_limit"}),
+            LocalBrainSensor(coordinator, entry, "last_move_current_a", "Last move current", "mdi:current-dc",
+                             unit=UnitOfElectricCurrent.AMPERE, device_class=SensorDeviceClass.CURRENT, precision=3),
+            LocalBrainSensor(coordinator, entry, "last_move_current_limit_a", "Last move current limit", "mdi:current-dc",
+                             unit=UnitOfElectricCurrent.AMPERE, device_class=SensorDeviceClass.CURRENT, precision=3),
+            LocalBrainSensor(coordinator, entry, "motor_current_a", "Motor current", "mdi:current-dc",
+                             unit=UnitOfElectricCurrent.AMPERE, device_class=SensorDeviceClass.CURRENT, precision=3),
             LocalBrainSensor(coordinator, entry, "travel_inches", "Travel", "mdi:ruler",
                              unit=UnitOfLength.INCHES, device_class=SensorDeviceClass.DISTANCE, precision=2),
         ])
@@ -181,8 +186,10 @@ class LocalBrainSensor(CoordinatorEntity, SensorEntity):
 
     Last move effort: the motor current as a % of the motor controller's own current limit at that
     moment (the limit follows the door's learned effort profile; over 100 % for ~350 ms is the
-    controller's own obstruction reversal), the highest of the move. The current's scale in amps
-    isn't known, so the raw values are attributes only."""
+    controller's own obstruction reversal), the highest of the move; the current and limit behind it
+    (mA) are attributes. Currents in amps: the controller reports mA (decoded from its firmware:
+    1.1 V/A sense chain). Last move current is the move's peak; Last move current limit is the
+    controller's limit at the move's highest effort; Motor current is live (~0.03 A at rest)."""
 
     _attr_has_entity_name = True
     _attr_state_class = SensorStateClass.MEASUREMENT
