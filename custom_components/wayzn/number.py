@@ -26,6 +26,11 @@ LOCAL_NUMBERS = [
     # ("Travel" sensor). Keeps the unique id of the earlier counts entity.
     ("expected_travel_inches", "Expected travel", 0, 52.1, 0.01, "in", NumberMode.BOX, "mdi:ruler",
      "expected_travel"),
+    # When a power-up calibration ends by stalling at the closed end, the door is jammed into the frame
+    # there; it is zeroed this far further closed, so later closes stop short of it instead of
+    # overcurrent-reversing at the very end. 0.039 in (30 counts) verified on our door 2026-11-24.
+    ("stall_allowance_inches", "Calibration stall allowance", 0, 0.26, 0.001, "in", NumberMode.BOX,
+     "mdi:arrow-collapse-horizontal", None),
 ]
 
 
@@ -57,4 +62,7 @@ class LocalSettingNumber(LocalSettingEntity, NumberEntity):
         return self.setting
 
     async def async_set_native_value(self, value: float) -> None:
-        await self._set(int(value) if self._key == "hold_s" else round(float(value), 2))
+        if self._key == "hold_s":
+            await self._set(int(value))
+        else:
+            await self._set(round(float(value), 3 if self._key == "stall_allowance_inches" else 2))

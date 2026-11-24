@@ -97,6 +97,7 @@ creating the entry.
 | Recalibrate | button (config) | The door runs its calibration (auto_zero) now: ~90 s, the door moves. Refused unless the door is still, the doorway clear and no fault latched |
 | Relearn doorway background | button (config) | The Grid-EYE takes the next 2 s as the empty doorway (press with the doorway clear). The door also does this by itself when the whole view has drifted warm while reading occupied |
 | Expected travel | number (config), in | The door's full travel. A calibration that measures more than 2 % off is rejected and retried (3 failures: fault); also the travel the door uses when it zeroes itself as closed after its motor controller restarts at the closed end mid-calibration. 0 = none. Set it from the Travel sensor after a good calibration |
+| Calibration stall allowance | number (config), in | When a power-up calibration ends by stalling at the closed end (the door is jammed into the frame there), the door is zeroed this far further closed, so later closes don't overcurrent-reverse at the very end. 0.039 in on our door |
 | Travel | sensor, in | Full travel as the door's motor controller last measured it |
 | Occupied threshold | number (config), 0.2-5 | The safety level that blocks and reverses closing; must not exceed the presence threshold |
 
