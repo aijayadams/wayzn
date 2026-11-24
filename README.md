@@ -91,6 +91,8 @@ creating the entry.
 | Obstruction | binary sensor (occupancy) | The doorway isn't clear: the door won't close, and a closing door reverses |
 | Fault | binary sensor (problem) | On while the door has a latched fault (`reason` attribute); it then holds itself open and refuses closes. Unknown when the door isn't reporting |
 | Clear fault | button | Clears a fault the door latched (it holds itself open until then) |
+| Recalibrate | button (config) | The door runs its calibration (auto_zero) now: ~90 s, the door moves. Refused unless the door is still, the doorway clear and no fault latched |
+| Relearn doorway background | button (config) | The Grid-EYE takes the next 2 s as the empty doorway (press with the doorway clear). The door also does this by itself when the whole view has drifted warm while reading occupied |
 | Expected travel | number (config), in | The door's full travel. A calibration that measures more than 2 % off is rejected and retried (3 failures: fault); also the travel the door uses when it zeroes itself as closed after its motor controller restarts at the closed end mid-calibration. 0 = none. Set it from the Travel sensor after a good calibration |
 | Travel | sensor, in | Full travel as the door's motor controller last measured it |
 | Occupied threshold | number (config), 0.2-5 | The safety level that blocks and reverses closing; must not exceed the presence threshold |

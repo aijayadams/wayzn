@@ -177,6 +177,19 @@ def test_clear_fault_is_confirmed(hass, run):
         run(c2.async_clear_fault())
 
 
+def test_maintenance_posts_and_refusal_says_why(hass, run):
+    c = _coord(hass, {"/api/calibrate": [(200, {"ok": True})], "/api/status": [_status("closed")]})
+    run(c.async_maintenance("calibrate"))
+    assert hass.session.calls[0][:2] == ("POST", "/api/calibrate")
+    c2 = _coord(hass, {"/api/calibrate": [(409, {"ok": False, "reason": "doorway not clear"})]})
+    with pytest.raises(HomeAssistantError, match="doorway not clear"):
+        run(c2.async_maintenance("calibrate"))
+    c3 = _coord(hass, {"/api/relearn": [(200, {"ok": True})], "/api/status": [_status("closed")]})
+    run(c3.async_maintenance("relearn"))
+    with pytest.raises(HomeAssistantError, match="unknown action"):
+        run(c3.async_maintenance("reboot"))
+
+
 def test_auto_toggle_is_confirmed(hass, run):
     c = _coord(hass, {"/api/auto": [(200, {"ok": True})], "/api/status": [_status(auto=False)]})
     run(c.async_set_auto(False))

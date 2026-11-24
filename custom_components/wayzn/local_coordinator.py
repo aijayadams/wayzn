@@ -215,6 +215,25 @@ class LocalBrainCoordinator(DataUpdateCoordinator):
             raise HomeAssistantError(f"Dog door still reports a fault: {left}")
         _LOGGER.info("wayzn-brain fault cleared from Home Assistant")
 
+    async def async_maintenance(self, action: str) -> None:
+        """POST /api/calibrate (auto_zero now) or /api/relearn (Grid-EYE background). The door
+        refuses a calibration unless it is still, the doorway clear and no fault latched: say why."""
+        if action not in ("calibrate", "relearn"):
+            raise HomeAssistantError(f"unknown action {action}")
+        try:
+            status, body = await self._request("POST", f"/api/{action}")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise HomeAssistantError(f"Dog door unreachable: {e}") from e
+        if status == 401:
+            raise HomeAssistantError("Dog door rejected the API token")
+        if status != 200 or not body.get("ok"):
+            raise HomeAssistantError(f"Dog door refused {action}: {body.get('reason') or f'HTTP {status}'}")
+        _LOGGER.info("wayzn-brain %s started from Home Assistant", action)
+        if action == "calibrate":  # it moves for ~90 s: poll fast meanwhile
+            self._active_until = time.monotonic() + 120
+            self.update_interval = POLL_ACTIVE
+        await self.async_request_refresh()
+
     # ------------------------------------------------------------------ commands
     async def async_send_command(self, command: str) -> None:
         """Send open/close. Always sent, whatever we believe the state is."""
